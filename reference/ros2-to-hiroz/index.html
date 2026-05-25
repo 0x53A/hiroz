@@ -10,22 +10,28 @@
       
       
       
+        <link rel="canonical" href="https://zettascalelabs.github.io/hiroz/reference/ros2-to-hiroz/">
       
       
+        <link rel="prev" href="../feature-comparison/">
       
-      <link rel="icon" href="/hiroz/assets/images/favicon.png">
+      
+        <link rel="next" href="../../experimental/rmw-zenoh-rs/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.20">
     
     
       
-        <title>HIROZ</title>
+        <title>ROS 2 → hiroz API Mapping - HIROZ</title>
       
     
     
-      <link rel="stylesheet" href="/hiroz/assets/stylesheets/main.e53b48f4.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.e53b48f4.min.css">
       
         
-        <link rel="stylesheet" href="/hiroz/assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -44,11 +50,11 @@
       
     
     
-      <link rel="stylesheet" href="/hiroz/stylesheets/home.css">
+      <link rel="stylesheet" href="../../stylesheets/home.css">
     
-      <link rel="stylesheet" href="/hiroz/stylesheets/actions.css">
+      <link rel="stylesheet" href="../../stylesheets/actions.css">
     
-    <script>__md_scope=new URL("/hiroz/",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -73,6 +79,11 @@
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
       
+        
+        <a href="#ros-2-hiroz-api-mapping" class="md-skip">
+          Skip to content
+        </a>
+      
     </div>
     <div data-md-component="announce">
       
@@ -85,7 +96,7 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="/hiroz/." title="HIROZ" class="md-header__button md-logo" aria-label="HIROZ" data-md-component="logo">
+    <a href="../.." title="HIROZ" class="md-header__button md-logo" aria-label="HIROZ" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 163" overflow="hidden"><path d="M67.5,0 C70.5,10.015361 71.5,23.0353303 70.5,39.0599078 C87.5,23.5360983 102.5,15.7741935 115.5,15.7741935 C108,23.2857143 108.272452,33.9711351 112.5,33.0506912 C124,30.546851 136.5,32.5499232 150,39.0599078 L150,153.269585 C150,165.695992 139.926407,175.769585 127.5,175.769585 L61.1792721,175.769585 C54.9660687,175.769585 49.9292721,170.732789 49.9292721,164.519585 C49.9292721,162.825588 50.3118282,161.153461 51.0483941,159.627979 C55.1904226,151.049532 63.9242912,142.158178 77.25,132.953917 C99,117.930876 107.25,107.414747 107.25,87.8847926 C107.25,76.6175115 101.235622,69.7933468 93,69.1059908 C84,68.3548387 77.25,72.8617512 77.25,79.6221198 C77.25,83.1274962 78.25,86.1321045 80.25,88.6359447 L45,114.175115 C42.5,117.680492 41.25,121.686636 41.25,126.193548 C31.75,126.193548 26.5,120.935484 25.5,110.419355 L30.5,74.1136713 C24.1666667,69.2729135 19.25,63.5140809 15.75,56.8371736 C21.5833333,59.8417819 27.3527952,61.6613272 33.0583855,62.2958096 L36,43.5668203 C38.5,30.546851 41.75,22.0337942 45.75,18.0276498 C45.25,27.0414747 46.25,38.0583717 48.75,51.078341 C59.25,35.5545315 65.5,18.5284178 67.5,0 Z M55.5,59.3410138 C54.8493151,62.5994361 52.5050666,67.1299821 48.4672671,72.9331549 C49.3254255,73.6214254 49.875,74.6796138 49.875,75.8663594 C49.875,77.9406086 48.1960678,79.6221198 46.125,79.6221198 C45.3413993,79.6221198 44.6139341,79.3814062 44.0134198,78.9679649 C42.9192012,80.380157 41.7480613,81.8501288 40.5,83.3778802 C48.0409322,84.7516633 53.0409322,83.2493592 55.5,78.8709677 C58.5613983,73.4201217 58.5,65.3502304 55.5,59.3410138 Z"/></svg>
@@ -105,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              
+              ROS 2 → hiroz API Mapping
             
           </span>
         </div>
@@ -212,7 +223,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="/hiroz/." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -233,7 +244,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/hiroz/getting-started/quick-start/" class="md-tabs__link">
+        <a href="../../getting-started/quick-start/" class="md-tabs__link">
           
   
   
@@ -253,7 +264,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/hiroz/core-concepts/pubsub/" class="md-tabs__link">
+        <a href="../../core-concepts/pubsub/" class="md-tabs__link">
           
   
   
@@ -273,7 +284,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/hiroz/user-guide/networking/" class="md-tabs__link">
+        <a href="../../user-guide/networking/" class="md-tabs__link">
           
   
   
@@ -293,7 +304,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/hiroz/tools/console/" class="md-tabs__link">
+        <a href="../../tools/console/" class="md-tabs__link">
           
   
   
@@ -320,7 +331,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/hiroz/bindings/python-quick-start/" class="md-tabs__link">
+        <a href="../../bindings/python-quick-start/" class="md-tabs__link">
           
   
   
@@ -343,7 +354,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/hiroz/experimental/shm/" class="md-tabs__link">
+        <a href="../../experimental/shm/" class="md-tabs__link">
           
   
   
@@ -359,11 +370,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="/hiroz/reference/feature-comparison/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../feature-comparison/" class="md-tabs__link">
           
   
   
@@ -403,7 +416,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="/hiroz/." title="HIROZ" class="md-nav__button md-logo" aria-label="HIROZ" data-md-component="logo">
+    <a href="../.." title="HIROZ" class="md-nav__button md-logo" aria-label="HIROZ" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 163" overflow="hidden"><path d="M67.5,0 C70.5,10.015361 71.5,23.0353303 70.5,39.0599078 C87.5,23.5360983 102.5,15.7741935 115.5,15.7741935 C108,23.2857143 108.272452,33.9711351 112.5,33.0506912 C124,30.546851 136.5,32.5499232 150,39.0599078 L150,153.269585 C150,165.695992 139.926407,175.769585 127.5,175.769585 L61.1792721,175.769585 C54.9660687,175.769585 49.9292721,170.732789 49.9292721,164.519585 C49.9292721,162.825588 50.3118282,161.153461 51.0483941,159.627979 C55.1904226,151.049532 63.9242912,142.158178 77.25,132.953917 C99,117.930876 107.25,107.414747 107.25,87.8847926 C107.25,76.6175115 101.235622,69.7933468 93,69.1059908 C84,68.3548387 77.25,72.8617512 77.25,79.6221198 C77.25,83.1274962 78.25,86.1321045 80.25,88.6359447 L45,114.175115 C42.5,117.680492 41.25,121.686636 41.25,126.193548 C31.75,126.193548 26.5,120.935484 25.5,110.419355 L30.5,74.1136713 C24.1666667,69.2729135 19.25,63.5140809 15.75,56.8371736 C21.5833333,59.8417819 27.3527952,61.6613272 33.0583855,62.2958096 L36,43.5668203 C38.5,30.546851 41.75,22.0337942 45.75,18.0276498 C45.25,27.0414747 46.25,38.0583717 48.75,51.078341 C59.25,35.5545315 65.5,18.5284178 67.5,0 Z M55.5,59.3410138 C54.8493151,62.5994361 52.5050666,67.1299821 48.4672671,72.9331549 C49.3254255,73.6214254 49.875,74.6796138 49.875,75.8663594 C49.875,77.9406086 48.1960678,79.6221198 46.125,79.6221198 C45.3413993,79.6221198 44.6139341,79.3814062 44.0134198,78.9679649 C42.9192012,80.380157 41.7480613,81.8501288 40.5,83.3778802 C48.0409322,84.7516633 53.0409322,83.2493592 55.5,78.8709677 C58.5613983,73.4201217 58.5,65.3502304 55.5,59.3410138 Z"/></svg>
@@ -433,7 +446,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -498,7 +511,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/getting-started/quick-start/" class="md-nav__link">
+      <a href="../../getting-started/quick-start/" class="md-nav__link">
         
   
   
@@ -521,7 +534,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/examples/" class="md-nav__link">
+      <a href="../../user-guide/examples/" class="md-nav__link">
         
   
   
@@ -544,7 +557,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/getting-started/building/" class="md-nav__link">
+      <a href="../../getting-started/building/" class="md-nav__link">
         
   
   
@@ -567,7 +580,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/getting-started/distro-compatibility/" class="md-nav__link">
+      <a href="../../getting-started/distro-compatibility/" class="md-nav__link">
         
   
   
@@ -640,7 +653,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/core-concepts/pubsub/" class="md-nav__link">
+      <a href="../../core-concepts/pubsub/" class="md-nav__link">
         
   
   
@@ -663,7 +676,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/core-concepts/services/" class="md-nav__link">
+      <a href="../../core-concepts/services/" class="md-nav__link">
         
   
   
@@ -729,7 +742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/core-concepts/actions/" class="md-nav__link">
+      <a href="../../core-concepts/actions/" class="md-nav__link">
         
   
   
@@ -752,7 +765,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/core-concepts/actions-advanced/" class="md-nav__link">
+      <a href="../../core-concepts/actions-advanced/" class="md-nav__link">
         
   
   
@@ -783,7 +796,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/core-concepts/parameters/" class="md-nav__link">
+      <a href="../../core-concepts/parameters/" class="md-nav__link">
         
   
   
@@ -806,7 +819,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/core-concepts/lifecycle/" class="md-nav__link">
+      <a href="../../core-concepts/lifecycle/" class="md-nav__link">
         
   
   
@@ -879,7 +892,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/networking/" class="md-nav__link">
+      <a href="../../user-guide/networking/" class="md-nav__link">
         
   
   
@@ -945,7 +958,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/config-options/" class="md-nav__link">
+      <a href="../../user-guide/config-options/" class="md-nav__link">
         
   
   
@@ -968,7 +981,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/config-advanced/" class="md-nav__link">
+      <a href="../../user-guide/config-advanced/" class="md-nav__link">
         
   
   
@@ -999,7 +1012,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/interop/" class="md-nav__link">
+      <a href="../../user-guide/interop/" class="md-nav__link">
         
   
   
@@ -1022,7 +1035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/bridge/" class="md-nav__link">
+      <a href="../../user-guide/bridge/" class="md-nav__link">
         
   
   
@@ -1088,7 +1101,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/core-concepts/message-cache/" class="md-nav__link">
+      <a href="../../core-concepts/message-cache/" class="md-nav__link">
         
   
   
@@ -1111,7 +1124,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/message-generation/" class="md-nav__link">
+      <a href="../../user-guide/message-generation/" class="md-nav__link">
         
   
   
@@ -1134,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/custom-messages/" class="md-nav__link">
+      <a href="../../user-guide/custom-messages/" class="md-nav__link">
         
   
   
@@ -1157,7 +1170,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/user-guide/protobuf/" class="md-nav__link">
+      <a href="../../user-guide/protobuf/" class="md-nav__link">
         
   
   
@@ -1238,7 +1251,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/tools/console/" class="md-nav__link">
+      <a href="../../tools/console/" class="md-nav__link">
         
   
   
@@ -1354,7 +1367,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/bindings/python-quick-start/" class="md-nav__link">
+      <a href="../../bindings/python-quick-start/" class="md-nav__link">
         
   
   
@@ -1377,7 +1390,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/bindings/python/" class="md-nav__link">
+      <a href="../../bindings/python/" class="md-nav__link">
         
   
   
@@ -1400,7 +1413,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/bindings/python-codegen/" class="md-nav__link">
+      <a href="../../bindings/python-codegen/" class="md-nav__link">
         
   
   
@@ -1474,7 +1487,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/bindings/go-quick-start/" class="md-nav__link">
+      <a href="../../bindings/go-quick-start/" class="md-nav__link">
         
   
   
@@ -1497,7 +1510,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/bindings/go/" class="md-nav__link">
+      <a href="../../bindings/go/" class="md-nav__link">
         
   
   
@@ -1578,7 +1591,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/experimental/shm/" class="md-nav__link">
+      <a href="../../experimental/shm/" class="md-nav__link">
         
   
   
@@ -1605,26 +1618,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
         
           
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
             
   
   
@@ -1637,7 +1655,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             Reference
@@ -1651,7 +1669,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/reference/feature-comparison/" class="md-nav__link">
+      <a href="../feature-comparison/" class="md-nav__link">
         
   
   
@@ -1671,10 +1689,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="/hiroz/reference/ros2-to-hiroz/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    ROS 2 → hiroz API Mapping
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1685,6 +1725,71 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#core-concepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Concepts
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#no-spin-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      No Spin Loop
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#initialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Initialization
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#qos-presets" class="md-nav__link">
+    <span class="md-ellipsis">
+      QoS Presets
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-differences" class="md-nav__link">
+    <span class="md-ellipsis">
+      Key Differences
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1697,7 +1802,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/experimental/rmw-zenoh-rs/" class="md-nav__link">
+      <a href="../../experimental/rmw-zenoh-rs/" class="md-nav__link">
         
   
   
@@ -1720,7 +1825,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/experimental/keyexpr-formats/" class="md-nav__link">
+      <a href="../../experimental/keyexpr-formats/" class="md-nav__link">
         
   
   
@@ -1743,7 +1848,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/reference/feature-flags/" class="md-nav__link">
+      <a href="../feature-flags/" class="md-nav__link">
         
   
   
@@ -1766,7 +1871,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/getting-started/nix/" class="md-nav__link">
+      <a href="../../getting-started/nix/" class="md-nav__link">
         
   
   
@@ -1789,7 +1894,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/hiroz/reference/troubleshooting/" class="md-nav__link">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   
@@ -1829,6 +1934,61 @@
   
   
   
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#core-concepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Concepts
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#no-spin-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      No Spin Loop
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#initialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Initialization
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#qos-presets" class="md-nav__link">
+    <span class="md-ellipsis">
+      QoS Presets
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-differences" class="md-nav__link">
+    <span class="md-ellipsis">
+      Key Differences
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
   
 </nav>
                   </div>
@@ -1840,8 +2000,189 @@
             <div class="md-content" data-md-component="content">
               <article class="md-content__inner md-typeset">
                 
-  <h1>404 - Not found</h1>
+                  
 
+
+  
+    <a href="https://github.com/ZettaScaleLabs/hiroz/edit/main/docs/reference/ros2-to-hiroz.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="ros-2-hiroz-api-mapping">ROS 2 → hiroz API Mapping<a class="headerlink" href="#ros-2-hiroz-api-mapping" title="Permanent link">&para;</a></h1>
+<p>If you know rclcpp or rclpy, this table maps familiar concepts to their hiroz equivalents.</p>
+<h2 id="core-concepts">Core Concepts<a class="headerlink" href="#core-concepts" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>rclcpp / rclpy</th>
+<th>hiroz (Rust)</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rclcpp::Node</code></td>
+<td><code>ZNode</code></td>
+<td>Created via <code>ctx.create_node("name").build()?</code></td>
+</tr>
+<tr>
+<td><code>rclcpp::Publisher&lt;T&gt;</code></td>
+<td><code>ZPub&lt;T&gt;</code></td>
+<td><code>node.create_pub::&lt;T&gt;("topic").build()?</code></td>
+</tr>
+<tr>
+<td><code>rclcpp::Subscription&lt;T&gt;</code></td>
+<td><code>ZSub&lt;T&gt;</code></td>
+<td>Three patterns: blocking <code>recv()</code>, async <code>async_recv()</code>, or callback via <code>build_with_callback()</code></td>
+</tr>
+<tr>
+<td><code>rclcpp::Service&lt;T&gt;</code></td>
+<td><code>ZServer&lt;T&gt;</code></td>
+<td>Pull model — call <code>take_request()</code> when ready to handle</td>
+</tr>
+<tr>
+<td><code>rclcpp::Client&lt;T&gt;</code></td>
+<td><code>ZClient&lt;T&gt;</code></td>
+<td><code>call(&amp;req).await</code> or <code>call_with_timeout(&amp;req, duration).await</code></td>
+</tr>
+<tr>
+<td><code>rclcpp_action::Server&lt;T&gt;</code></td>
+<td><code>ZActionServer&lt;T&gt;</code></td>
+<td>Uses <code>with_handler</code> closure receiving <code>ExecutingGoal&lt;A&gt;</code></td>
+</tr>
+<tr>
+<td><code>rclcpp_action::Client&lt;T&gt;</code></td>
+<td><code>ZActionClient&lt;T&gt;</code></td>
+<td><code>send_goal()</code> returns a <code>GoalHandle</code></td>
+</tr>
+<tr>
+<td><code>rclcpp::ParameterServer</code></td>
+<td><code>ZParameterServer</code></td>
+<td>Auto-creates <code>ros2 param</code> compatible services</td>
+</tr>
+<tr>
+<td><code>rclcpp_lifecycle::LifecycleNode</code></td>
+<td><code>ZLifecycleNode</code></td>
+<td>Same 4-state machine (Unconfigured → Inactive → Active → Finalized)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="no-spin-loop">No Spin Loop<a class="headerlink" href="#no-spin-loop" title="Permanent link">&para;</a></h2>
+<p>hiroz has no equivalent to <code>rclcpp::spin()</code>. hiroz is fully reactive: subscribers are either
+callback-based or backed by an internal queue, and services use a pull model. Your entry point
+is a standard <code>#[tokio::main]</code> async function — no spin thread required.</p>
+<p><strong>rclcpp:</strong></p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">rclcpp</span><span class="o">::</span><span class="n">init</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span><span class="w"> </span><span class="n">argv</span><span class="p">);</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">auto</span><span class="w"> </span><span class="n">node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">MyNode</span><span class="o">&gt;</span><span class="p">();</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">rclcpp</span><span class="o">::</span><span class="n">spin</span><span class="p">(</span><span class="n">node</span><span class="p">);</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">rclcpp</span><span class="o">::</span><span class="n">shutdown</span><span class="p">();</span>
+</span></code></pre></div>
+<p><strong>hiroz:</strong></p>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="cp">#[tokio::main]</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ZContextBuilder</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">        </span><span class="p">.</span><span class="n">with_connect_endpoints</span><span class="p">([</span><span class="s">&quot;tcp/127.0.0.1:7447&quot;</span><span class="p">])</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">create_node</span><span class="p">(</span><span class="s">&quot;my_node&quot;</span><span class="p">).</span><span class="n">build</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="c1">// ... set up pubs, subs, services ...</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="n">tokio</span><span class="p">::</span><span class="n">signal</span><span class="p">::</span><span class="n">ctrl_c</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
+</span></code></pre></div>
+<h2 id="initialization">Initialization<a class="headerlink" href="#initialization" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>rclcpp</th>
+<th>hiroz</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Initialize runtime</td>
+<td><code>rclcpp::init(argc, argv)</code></td>
+<td><code>ZContextBuilder::default()</code></td>
+</tr>
+<tr>
+<td>Connect to network</td>
+<td>automatic (DDS multicast)</td>
+<td><code>.with_connect_endpoints(["tcp/127.0.0.1:7447"])</code></td>
+</tr>
+<tr>
+<td>Set domain ID</td>
+<td><code>--ros-args -p use_sim_time:=...</code> / env</td>
+<td><code>.with_domain_id(42)</code></td>
+</tr>
+<tr>
+<td>Build context</td>
+<td>implicit</td>
+<td><code>.build()?</code></td>
+</tr>
+<tr>
+<td>Create node</td>
+<td><code>std::make_shared&lt;rclcpp::Node&gt;("name")</code></td>
+<td><code>ctx.create_node("name").build()?</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="qos-presets">QoS Presets<a class="headerlink" href="#qos-presets" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>rclcpp</th>
+<th>hiroz</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rclcpp::SensorDataQoS()</code></td>
+<td><code>QosProfile::sensor_data()</code></td>
+<td>Best-effort, keep last 5</td>
+</tr>
+<tr>
+<td><code>rclcpp::SystemDefaultsQoS()</code></td>
+<td><code>QosProfile::default()</code></td>
+<td>Reliable, keep last 10</td>
+</tr>
+<tr>
+<td><code>rclcpp::ServicesQoS()</code></td>
+<td><code>QosProfile::services_default()</code></td>
+<td>Reliable, volatile</td>
+</tr>
+<tr>
+<td><code>rclcpp::QoS(10).reliable()</code></td>
+<td><code>QosProfile { history: KeepLast(10), reliability: Reliable, .. Default::default() }</code></td>
+<td>Custom profile</td>
+</tr>
+</tbody>
+</table>
+<h2 id="key-differences">Key Differences<a class="headerlink" href="#key-differences" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No spin loop</strong> — hiroz is fully async and reactive. Use <code>#[tokio::main]</code> and <code>await</code>; no executor management needed.</li>
+<li><strong>Rust ownership replaces shared_ptr</strong> — no <code>Node::SharedPtr</code>, no reference counting in user code. The borrow checker enforces correct lifetime without manual memory management.</li>
+<li><strong>Type hashes required for ROS 2 interop</strong> — when communicating with native ROS 2 nodes, message types must carry RIHS01 type hashes. Use schema-generated types from <code>hiroz-codegen</code> rather than hand-rolled structs.</li>
+<li><strong>Pull model for services</strong> — there is no callback registration for service servers. Call <code>take_request()</code> when your application is ready to handle an incoming request.</li>
+<li><strong>Router required</strong> — hiroz does not use DDS multicast discovery. A Zenoh router must be running and reachable at the configured endpoint (default: <code>tcp/127.0.0.1:7447</code>).</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
               </article>
             </div>
           
@@ -1859,6 +2200,44 @@
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../feature-comparison/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Feature Comparison">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Feature Comparison
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../experimental/rmw-zenoh-rs/" class="md-footer__link md-footer__link--next" aria-label="Next: rmw_zenoh_rs">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                rmw_zenoh_rs
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
     
   
   <div class="md-footer-meta md-typeset">
@@ -1885,16 +2264,16 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "/hiroz/", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.top", "navigation.footer", "content.code.copy", "content.code.annotate", "content.action.edit", "search.suggest", "search.highlight"], "search": "/hiroz/assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.top", "navigation.footer", "content.code.copy", "content.code.annotate", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="/hiroz/assets/javascripts/bundle.f55a23d4.min.js"></script>
+      <script src="../../assets/javascripts/bundle.f55a23d4.min.js"></script>
       
-        <script src="/hiroz/javascripts/mermaid.js"></script>
+        <script src="../../javascripts/mermaid.js"></script>
       
-        <script src="/hiroz/javascripts/action-anim.js"></script>
+        <script src="../../javascripts/action-anim.js"></script>
       
-        <script src="/hiroz/javascripts/flashcards.js"></script>
+        <script src="../../javascripts/flashcards.js"></script>
       
     
   </body>

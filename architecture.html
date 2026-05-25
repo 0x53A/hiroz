@@ -7,15 +7,16 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            padding: 80px 40px 40px 0px;
+            padding: 40px 40px 40px 40px;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height: 100vh;
             margin: 0;
+            overflow: hidden;
         }
 
         .container {
             max-width: 1600px;
-            margin: 0 auto 0 -300px;
+            margin: 0 auto;
             perspective: 1500px;
             perspective-origin: center center;
         }
@@ -187,7 +188,7 @@
                 0 0 40px rgba(255, 255, 255, 0.1) inset;
         }
 
-        .ros-z {
+        .hiroz {
             background: linear-gradient(135deg, #EC407A, #C2185B);
             color: white;
             box-shadow:
@@ -219,7 +220,7 @@
                 0 0 40px rgba(255, 255, 255, 0.1) inset;
         }
 
-        .ros-z-apps {
+        .hiroz-apps {
             background: linear-gradient(135deg, #AB47BC, #7B1FA2);
             color: white;
             box-shadow:
@@ -247,13 +248,13 @@
                 </div>
             </div>
 
-            <!-- Stack 2: Direct ros-z Path with Title -->
+            <!-- Stack 2: Direct hiroz Path with Title -->
             <div class="stack">
-                <div class="stack-label">Direct ros-z</div>
+                <div class="stack-label">Direct hiroz</div>
                 <div class="box zenoh-rust">Zenoh (Rust)</div>
-                <div class="box ros-z">ros-z</div>
-                <div class="box ros-z-apps">
-                    ros-z Apps
+                <div class="box hiroz">hiroz</div>
+                <div class="box hiroz-apps">
+                    hiroz Apps
                     <div class="list-text">
                         • Pure Rust<br>
                         • Optional ROS 2 deps<br>
@@ -273,8 +274,8 @@
             <div class="stack">
                 <div class="stack-label">Rust Native</div>
                 <div class="box zenoh-rust">Zenoh (Rust)</div>
-                <div class="box ros-z">
-                    ros-z
+                <div class="box hiroz">
+                    hiroz
                     <span class="small-text">rmw feature enabled</span>
                 </div>
                 <div class="box rmw">
