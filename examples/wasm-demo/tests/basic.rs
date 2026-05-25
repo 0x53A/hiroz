@@ -70,7 +70,7 @@ fn rmw_zenoh_key_expression() {
     let entity = EndpointEntity {
         id: 1,
         node: Some(node.clone()),
-        kind: EntityKind::Publisher,
+        kind: EndpointKind::Publisher,
         topic: "chatter".to_string(),
         type_info: Some(TypeInfo {
             name: "std_msgs::msg::dds_::String_".to_string(),
