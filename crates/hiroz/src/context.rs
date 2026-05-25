@@ -486,12 +486,17 @@ impl ZContextBuilder {
         }
 
         let session = zenoh::open(config).await?;
-        let graph = std::sync::Arc::new(crate::graph::Graph::new(&session, domain_id)?);
+        let graph = std::sync::Arc::new(crate::graph::Graph::new(
+            &session,
+            domain_id,
+            self.keyexpr_format.clone(),
+        )?);
 
         Ok(ZContext {
             session: std::sync::Arc::new(session),
             counter: std::sync::Arc::new(crate::context::GlobalCounter::default()),
             domain_id,
+            namespace: self.namespace,
             enclave,
             graph,
             remap_rules: self.remap_rules,

@@ -46,11 +46,8 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 
 # Zenoh
-zenoh = { version = "1.9.0", default-features = false, features = [
-  "transport_tcp",
-  "transport_serial",
-] }
-zenoh-ext = { version = "1.9.0", features = ["unstable"] }
+zenoh = { version = "1.9.0", default-features = false }
+zenoh-ext = { version = "1.9.0", default-features = false, features = ["unstable"] }
 zenoh-buffers = { version = "1.9.0" }
 
 # CLI
@@ -108,8 +105,26 @@ codegen-units = 1
 opt-level = 3
 panic = "abort"
 
-# Uncomment for WASM builds: override zenoh with local wasm-compatible fork
-# [patch.crates-io]
-# zenoh = { path = "../zenoh-wasm/zenoh" }
-# zenoh-ext = { path = "../zenoh-wasm/zenoh-ext" }
-# zenoh-buffers = { path = "../zenoh-wasm/commons/zenoh-buffers" }
+# Override zenoh with local wasm-compatible fork
+[patch.crates-io]
+zenoh = { path = "../zenoh-wasm/zenoh" }
+zenoh-ext = { path = "../zenoh-wasm/zenoh-ext" }
+zenoh-buffers = { path = "../zenoh-wasm/commons/zenoh-buffers" }
+zenoh-codec = { path = "../zenoh-wasm/commons/zenoh-codec" }
+zenoh-collections = { path = "../zenoh-wasm/commons/zenoh-collections" }
+zenoh-config = { path = "../zenoh-wasm/commons/zenoh-config" }
+zenoh-core = { path = "../zenoh-wasm/commons/zenoh-core" }
+zenoh-crypto = { path = "../zenoh-wasm/commons/zenoh-crypto" }
+zenoh-keyexpr = { path = "../zenoh-wasm/commons/zenoh-keyexpr" }
+zenoh-macros = { path = "../zenoh-wasm/commons/zenoh-macros" }
+zenoh-protocol = { path = "../zenoh-wasm/commons/zenoh-protocol" }
+zenoh-result = { path = "../zenoh-wasm/commons/zenoh-result" }
+zenoh-runtime = { path = "../zenoh-wasm/commons/zenoh-runtime" }
+zenoh-shm = { path = "../zenoh-wasm/commons/zenoh-shm" }
+zenoh-sync = { path = "../zenoh-wasm/commons/zenoh-sync" }
+zenoh-task = { path = "../zenoh-wasm/commons/zenoh-task" }
+zenoh-util = { path = "../zenoh-wasm/commons/zenoh-util" }
+zenoh-link = { path = "../zenoh-wasm/io/zenoh-link" }
+zenoh-link-commons = { path = "../zenoh-wasm/io/zenoh-link-commons" }
+zenoh-transport = { path = "../zenoh-wasm/io/zenoh-transport" }
+zenoh-plugin-trait = { path = "../zenoh-wasm/plugins/zenoh-plugin-trait" }
