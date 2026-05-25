@@ -48,7 +48,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use parking_lot::RwLock;
+use crate::compat::RwLock;
 use tracing::{debug, warn};
 use zenoh::Result;
 use zenoh::liveliness::LivelinessToken;

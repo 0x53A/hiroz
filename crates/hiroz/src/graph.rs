@@ -1,4 +1,4 @@
-use parking_lot::Mutex;
+use crate::compat::Mutex;
 use serde::Serialize;
 use slab::Slab;
 use std::{
@@ -604,48 +604,54 @@ impl Graph {
         // Query existing liveliness tokens from all connected sessions
         // This is crucial for cross-context discovery where entities from other sessions
         // were created before this session started
-        let replies = session
-            .liveliness()
-            .get(&c_liveliness_pattern)
-            .timeout(std::time::Duration::from_secs(3))
-            .wait()?;
+        //
+        // On WASM, blocking recv() is not available, so we skip the initial query.
+        // Existing entities will still be discovered via the liveliness subscriber callback.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let replies = session
+                .liveliness()
+                .get(&c_liveliness_pattern)
+                .timeout(std::time::Duration::from_secs(3))
+                .wait()?;
 
-        // Process all replies and add them to the graph.
-        // Filter current-session entities: add_local_entity() already inserted them, so
-        // re-inserting from the query reply is redundant. Mirrors rmw_zenoh_cpp which passes
-        // ignore_from_current_session=true for query replies.
-        // Endpoints without node identity carry no z_id and are never filtered.
-        let mut reply_count = 0;
-        let mut filtered_count = 0;
-        while let Ok(reply) = replies.recv() {
-            reply_count += 1;
-            if let Ok(sample) = reply.into_result() {
-                let key_expr = sample.key_expr().to_owned();
-                let ke = LivelinessKE(key_expr.clone());
+            // Process all replies and add them to the graph.
+            // Filter current-session entities: add_local_entity() already inserted them, so
+            // re-inserting from the query reply is redundant. Mirrors rmw_zenoh_cpp which passes
+            // ignore_from_current_session=true for query replies.
+            // Endpoints without node identity carry no z_id and are never filtered.
+            let mut reply_count = 0;
+            let mut filtered_count = 0;
+            while let Ok(reply) = replies.recv() {
+                reply_count += 1;
+                if let Ok(sample) = reply.into_result() {
+                    let key_expr = sample.key_expr().to_owned();
+                    let ke = LivelinessKE(key_expr.clone());
 
-                if let Ok(entity) = parser_arc(&key_expr) {
-                    let is_local = match &entity {
-                        Entity::Node(node) => node.z_id == zid,
-                        Entity::Endpoint(endpoint) => {
-                            endpoint.node.as_ref().is_some_and(|n| n.z_id == zid)
+                    if let Ok(entity) = parser_arc(&key_expr) {
+                        let is_local = match &entity {
+                            Entity::Node(node) => node.z_id == zid,
+                            Entity::Endpoint(endpoint) => {
+                                endpoint.node.as_ref().is_some_and(|n| n.z_id == zid)
+                            }
+                        };
+                        if is_local {
+                            filtered_count += 1;
+                            tracing::debug!("Graph: Filtered local entity: {}", key_expr.as_str());
+                            continue;
                         }
-                    };
-                    if is_local {
-                        filtered_count += 1;
-                        tracing::debug!("Graph: Filtered local entity: {}", key_expr.as_str());
-                        continue;
                     }
-                }
 
-                tracing::debug!("Graph: Caching cross-context entity: {}", key_expr.as_str());
-                graph_data.lock().insert(ke);
+                    tracing::debug!("Graph: Caching cross-context entity: {}", key_expr.as_str());
+                    graph_data.lock().insert(ke);
+                }
             }
+            tracing::debug!(
+                "Graph: Liveliness query received {} replies, filtered {} local entities",
+                reply_count,
+                filtered_count
+            );
         }
-        tracing::debug!(
-            "Graph: Liveliness query received {} replies, filtered {} local entities",
-            reply_count,
-            filtered_count
-        );
 
         Ok(Self {
             _subscriber: sub,

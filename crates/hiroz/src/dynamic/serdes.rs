@@ -54,6 +54,7 @@ impl ZSerializer for DynamicSerdeCdrSerdes {
         Self::serialize_to_zbuf(input)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn serialize_to_shm(
         input: &DynamicMessage,
         _estimated_size: usize,

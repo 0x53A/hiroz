@@ -45,6 +45,7 @@ pub struct ZNode {
     pub(crate) remap_rules: RemapRules,
     _lv_token: LivelinessToken,
     pub(crate) clock: crate::time::ZClock,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) shm_config: Option<Arc<crate::shm::ShmConfig>>,
     pub(crate) keyexpr_format: hiroz_protocol::KeyExprFormat,
     /// Optional type description service for this node.
@@ -74,6 +75,7 @@ pub struct ZNodeBuilder {
     pub(crate) graph: Arc<Graph>,
     pub(crate) remap_rules: RemapRules,
     pub(crate) clock: crate::time::ZClock,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) shm_config: Option<Arc<crate::shm::ShmConfig>>,
     pub(crate) keyexpr_format: hiroz_protocol::KeyExprFormat,
     /// Whether to enable the type description service for this node.
@@ -112,6 +114,7 @@ impl ZNodeBuilder {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_shm_config(mut self, config: crate::shm::ShmConfig) -> Self {
         self.shm_config = Some(Arc::new(config));
         self
@@ -271,6 +274,7 @@ impl Builder for ZNodeBuilder {
             graph: self.graph,
             remap_rules: self.remap_rules,
             clock: self.clock,
+            #[cfg(not(target_arch = "wasm32"))]
             shm_config: self.shm_config,
             keyexpr_format: self.keyexpr_format.clone(),
             type_desc_service,
@@ -341,6 +345,7 @@ impl ZNode {
             graph: self.graph.clone(),
             clock: self.clock.clone(),
             with_attachment: true,
+            #[cfg(not(target_arch = "wasm32"))]
             shm_config: self.shm_config.clone(),
             keyexpr_format: self.keyexpr_format.clone(),
             dyn_schema: None,

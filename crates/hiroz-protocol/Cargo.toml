@@ -12,7 +12,7 @@ categories = ["network-programming", "science::robotics"]
 
 [features]
 default = ["std", "rmw-zenoh"]
-std = ["zenoh/default"]
+std = []
 rmw-zenoh = []
 no-type-hash = []              # ROS 2 Humble doesn't support type hashing
 

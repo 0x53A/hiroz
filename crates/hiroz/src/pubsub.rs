@@ -116,6 +116,7 @@ pub struct ZPub<T: ZMessage, S: ZSerializer> {
     with_attachment: bool,
     clock: crate::time::ZClock,
     events_mgr: Arc<Mutex<EventsManager>>,
+    #[cfg(not(target_arch = "wasm32"))]
     shm_config: Option<Arc<crate::shm::ShmConfig>>,
     /// Schema for dynamic message publishing.
     pub dyn_schema: Option<Arc<crate::dynamic::schema::MessageSchema>>,
@@ -141,6 +142,7 @@ pub struct ZPubBuilder<T, S = SerdeCdrSerdes<T>> {
     pub(crate) graph: Arc<Graph>,
     pub(crate) clock: crate::time::ZClock,
     pub(crate) with_attachment: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) shm_config: Option<Arc<crate::shm::ShmConfig>>,
     pub(crate) keyexpr_format: hiroz_protocol::KeyExprFormat,
     /// Schema for dynamic message publishing.
@@ -188,6 +190,7 @@ impl<T, S> ZPubBuilder<T, S> {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_shm_config(mut self, config: crate::shm::ShmConfig) -> Self {
         self.shm_config = Some(Arc::new(config));
         self
@@ -212,6 +215,7 @@ impl<T, S> ZPubBuilder<T, S> {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn without_shm(mut self) -> Self {
         self.shm_config = None;
         self
@@ -224,6 +228,7 @@ impl<T, S> ZPubBuilder<T, S> {
             graph: self.graph,
             clock: self.clock,
             with_attachment: self.with_attachment,
+            #[cfg(not(target_arch = "wasm32"))]
             shm_config: self.shm_config,
             keyexpr_format: self.keyexpr_format.clone(),
             dyn_schema: self.dyn_schema,
@@ -371,6 +376,7 @@ where
             clock: self.clock,
             events_mgr: Arc::new(Mutex::new(EventsManager::new(gid))),
             with_attachment: self.with_attachment,
+            #[cfg(not(target_arch = "wasm32"))]
             shm_config: self.shm_config,
             dyn_schema: self.dyn_schema,
             encoding,
@@ -461,6 +467,7 @@ where
         use zenoh_buffers::buffer::Buffer;
 
         // Try direct SHM serialization if configured
+        #[cfg(not(target_arch = "wasm32"))]
         let (zbuf, actual_size) = if let Some(ref shm_cfg) = self.shm_config {
             let estimated_size = msg.estimated_serialized_size();
 
@@ -504,6 +511,14 @@ where
             (zbuf, size)
         };
 
+        #[cfg(target_arch = "wasm32")]
+        let (zbuf, actual_size) = {
+            tracing::Span::current().record("used_shm", false);
+            let zbuf = S::serialize_to_zbuf(msg);
+            let size = zbuf.len();
+            (zbuf, size)
+        };
+
         tracing::Span::current().record("payload_len", actual_size);
 
         let zbytes = zenoh::bytes::ZBytes::from(zbuf);
@@ -530,6 +545,7 @@ where
     /// a Tokio task without blocking the thread.
     pub async fn async_publish(&self, msg: &T) -> Result<()> {
         // Try direct SHM serialization if configured
+        #[cfg(not(target_arch = "wasm32"))]
         let zbuf = if let Some(ref shm_cfg) = self.shm_config {
             let estimated_size = msg.estimated_serialized_size();
 
@@ -544,6 +560,9 @@ where
         } else {
             S::serialize_to_zbuf(msg)
         };
+
+        #[cfg(target_arch = "wasm32")]
+        let zbuf = S::serialize_to_zbuf(msg);
 
         let zbytes = zenoh::bytes::ZBytes::from(zbuf);
         let mut put_builder = self.inner.put(zbytes);

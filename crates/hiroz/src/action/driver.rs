@@ -12,7 +12,7 @@ use std::{
 };
 
 use tokio::{task::JoinSet, time};
-use tokio_util::sync::CancellationToken;
+use crate::compat::CancellationToken;
 use zenoh::Wait;
 
 use super::{

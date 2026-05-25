@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio_util::sync::CancellationToken;
+use crate::compat::CancellationToken;
 use zenoh::{Result, Wait};
 
 use super::{
@@ -32,13 +32,13 @@ use crate::{
 /// Follows zenoh-python's per-entity queue pattern: each executing goal registers
 /// a dedicated channel. `drain()` reads the shared queue and routes by goal ID.
 pub(crate) struct CancelDispatcher {
-    routes: parking_lot::Mutex<HashMap<GoalId, flume::Sender<zenoh::query::Query>>>,
+    routes: crate::compat::Mutex<HashMap<GoalId, flume::Sender<zenoh::query::Query>>>,
 }
 
 impl CancelDispatcher {
     pub(crate) fn new() -> Self {
         Self {
-            routes: parking_lot::Mutex::new(HashMap::new()),
+            routes: crate::compat::Mutex::new(HashMap::new()),
         }
     }
 

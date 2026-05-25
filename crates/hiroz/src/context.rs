@@ -81,6 +81,7 @@ pub struct ZContextBuilder {
     config_overrides: Vec<(String, serde_json::Value)>,
     remap_rules: RemapRules,
     enable_logging: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     shm_config: Option<Arc<crate::shm::ShmConfig>>,
     keyexpr_format: hiroz_protocol::KeyExprFormat,
     clock: Option<ZClock>,
@@ -325,6 +326,7 @@ impl ZContextBuilder {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_shm_enabled(self) -> Result<Self> {
         let provider = Arc::new(
             crate::shm::ShmProviderBuilder::new(crate::shm::DEFAULT_SHM_POOL_SIZE).build()?,
@@ -349,6 +351,7 @@ impl ZContextBuilder {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_shm_pool_size(self, size_bytes: usize) -> Result<Self> {
         let provider = Arc::new(crate::shm::ShmProviderBuilder::new(size_bytes).build()?);
         Ok(self.with_shm_config(crate::shm::ShmConfig::new(provider)))
@@ -373,6 +376,7 @@ impl ZContextBuilder {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_shm_config(mut self, config: crate::shm::ShmConfig) -> Self {
         self.shm_config = Some(Arc::new(config));
         self
@@ -395,6 +399,7 @@ impl ZContextBuilder {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_shm_threshold(mut self, threshold: usize) -> Self {
         if let Some(ref mut config) = self.shm_config {
             // Need to modify Arc content - make it unique or clone
@@ -459,6 +464,43 @@ impl ZContextBuilder {
 
         Ok(self)
     }
+    /// Build the ZContext asynchronously (required for WASM).
+    ///
+    /// Unlike `build()`, this method:
+    /// - Uses `zenoh::open(config).await` instead of `.wait()`
+    /// - Skips environment variable lookups (not available in browsers)
+    /// - Requires a zenoh config to be provided via `with_zenoh_config()`
+    pub async fn build_async(self) -> zenoh::Result<ZContext> {
+        let enclave = self.enclave.clone();
+        let domain_id = self.domain_id;
+
+        let mut config = self
+            .zenoh_config
+            .unwrap_or_else(|| crate::config::session_config().unwrap());
+
+        // Apply JSON overrides
+        for (key, value) in self.config_overrides {
+            let value_str = serde_json::to_string(&value)
+                .map_err(|e| format!("Failed to serialize config value: {}", e))?;
+            config.insert_json5(&key, &value_str)?;
+        }
+
+        let session = zenoh::open(config).await?;
+        let graph = std::sync::Arc::new(crate::graph::Graph::new(&session, domain_id)?);
+
+        Ok(ZContext {
+            session: std::sync::Arc::new(session),
+            counter: std::sync::Arc::new(crate::context::GlobalCounter::default()),
+            domain_id,
+            enclave,
+            graph,
+            remap_rules: self.remap_rules,
+            #[cfg(not(target_arch = "wasm32"))]
+            shm_config: self.shm_config,
+            keyexpr_format: self.keyexpr_format,
+            clock: self.clock.unwrap_or_default(),
+        })
+    }
 }
 
 impl Builder for ZContextBuilder {
@@ -516,6 +558,7 @@ impl Builder for ZContextBuilder {
         };
 
         // common_overrides disables transport SHM; re-enable it when an SHM provider is set.
+        #[cfg(not(target_arch = "wasm32"))]
         if builder.shm_config.is_some() {
             crate::config::enable_transport_shm(&mut config).map_err(|e| {
                 format!("Failed to enable transport shared memory for SHM config: {e}")
@@ -565,6 +608,7 @@ impl Builder for ZContextBuilder {
             enclave,
             graph,
             remap_rules: builder.remap_rules,
+            #[cfg(not(target_arch = "wasm32"))]
             shm_config: builder.shm_config,
             keyexpr_format: builder.keyexpr_format,
             clock: builder.clock.unwrap_or_default(),
@@ -595,6 +639,7 @@ pub struct ZContext {
     enclave: String,
     graph: Arc<Graph>,
     remap_rules: RemapRules,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) shm_config: Option<Arc<crate::shm::ShmConfig>>,
     pub(crate) keyexpr_format: hiroz_protocol::KeyExprFormat,
     pub(crate) clock: ZClock,
@@ -644,6 +689,7 @@ impl ZContext {
             counter: self.counter.clone(),
             graph: self.graph.clone(),
             remap_rules: self.remap_rules.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
             shm_config: self.shm_config.clone(),
             keyexpr_format: self.keyexpr_format.clone(),
             clock: self.clock.clone(),

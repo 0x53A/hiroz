@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use event_listener::Event;
-use parking_lot::{Condvar, Mutex};
+use crate::compat::{Condvar, Mutex};
 
 /// A bounded queue that drops the OLDEST element when full (ROS depth QoS behavior).
 ///

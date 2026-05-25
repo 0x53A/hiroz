@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use parking_lot::Mutex;
+use crate::compat::Mutex;
 use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,7 +192,20 @@ impl ZClock {
 
     pub fn now(&self) -> ZTime {
         match self.inner.as_ref() {
-            ClockInner::System => ZTime::from_system_time(SystemTime::now()),
+            ClockInner::System => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ZTime::from_system_time(SystemTime::now())
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // js_sys::Date::now() returns milliseconds since epoch as f64
+                    let millis = js_sys::Date::now() as u64;
+                    ZTime {
+                        since_epoch: Duration::from_millis(millis),
+                    }
+                }
+            }
             ClockInner::Simulated(state) => *state.now.lock(),
         }
     }
@@ -227,11 +240,18 @@ impl ZClock {
 
     pub fn sleep_until(&self, deadline: ZTime) -> ZSleep {
         match self.inner.as_ref() {
+            #[cfg(not(target_arch = "wasm32"))]
             ClockInner::System => {
                 let now = SystemTime::now();
                 let deadline = deadline.to_system_time();
                 let duration = deadline.duration_since(now).unwrap_or(Duration::ZERO);
                 ZSleep(Box::pin(tokio::time::sleep(duration)))
+            }
+            #[cfg(target_arch = "wasm32")]
+            ClockInner::System => {
+                // On WASM, use a simple future that resolves immediately
+                // (real timer support would need setTimeout integration)
+                ZSleep(Box::pin(async {}))
             }
             ClockInner::Simulated(_) => {
                 let clock = self.clone();

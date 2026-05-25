@@ -100,6 +100,7 @@ pub trait ZSerializer {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     fn serialize_to_shm(
         input: Self::Input<'_>,
         estimated_size: usize,
@@ -244,6 +245,7 @@ where
         writer.into_zbuf()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn serialize_to_shm(
         input: &T,
         estimated_size: usize,
@@ -331,6 +333,7 @@ where
         writer.into_zbuf()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn serialize_to_shm(
         input: &T,
         estimated_size: usize,
@@ -410,6 +413,7 @@ where
         Self::serialize_to_zbuf(input)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn serialize_to_shm(
         input: &T,
         estimated_size: usize,

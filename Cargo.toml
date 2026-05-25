@@ -8,6 +8,7 @@ repository = "https://github.com/ZettaScaleLabs/hiroz"
 
 [workspace]
 resolver = "2"
+exclude = ["examples/wasm-demo"]
 members = [
   "crates/hiroz",
   "crates/hiroz-cdr",
@@ -58,7 +59,7 @@ clap = "4.5.45"
 # Async/sync primitives
 flume = "0.11.1"
 parking_lot = "0.12.4"
-tokio = "1.47.1"
+tokio = { version = "1.47.1", default-features = false }
 tokio-util = "0.7"
 event-listener = "5"
 
@@ -106,3 +107,9 @@ lto = "fat"
 codegen-units = 1
 opt-level = 3
 panic = "abort"
+
+# Uncomment for WASM builds: override zenoh with local wasm-compatible fork
+# [patch.crates-io]
+# zenoh = { path = "../zenoh-wasm/zenoh" }
+# zenoh-ext = { path = "../zenoh-wasm/zenoh-ext" }
+# zenoh-buffers = { path = "../zenoh-wasm/commons/zenoh-buffers" }

@@ -81,6 +81,7 @@ impl From<&[u8]> for ZBuf {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<zenoh::shm::ZShmMut> for ZBuf {
     #[inline]
     fn from(shm: zenoh::shm::ZShmMut) -> Self {

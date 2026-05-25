@@ -39,6 +39,9 @@
 //!
 //! Or import types individually from their modules.
 
+/// Platform-compatibility shims (parking_lot on native, std::sync on wasm32).
+pub mod compat;
+
 /// ROS 2 action support (goal, feedback, result).
 pub mod action;
 /// Attachment helpers for carrying metadata alongside messages.
@@ -84,6 +87,7 @@ pub mod ros_msg;
 /// ROS 2 service client and server.
 pub mod service;
 /// Shared-memory transport helpers.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod shm;
 /// Time and clock primitives for runtime and replay integration.
 pub mod time;

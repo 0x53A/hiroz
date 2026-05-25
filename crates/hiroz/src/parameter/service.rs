@@ -318,6 +318,7 @@ impl ParameterService {
                 graph: graph.clone(),
                 clock: clock.clone(),
                 with_attachment: true,
+                #[cfg(not(target_arch = "wasm32"))]
                 shm_config: None,
                 keyexpr_format: ke_format.clone(),
                 dyn_schema: None,
