@@ -88,19 +88,11 @@ run_e2e() {
     echo "Waiting for ROS 2 nodes to start..."
     sleep 10
 
-    # TODO: Add WASM test that subscribes to /chatter from the ROS 2 talker
-    # and publishes to /chatter for the ROS 2 listener
-    echo "E2E Docker stack is running. Manual verification:"
-    echo "  - ROS 2 talker publishes to /chatter"
-    echo "  - ROS 2 listener subscribes to /chatter"
-    echo "  - Zenoh router on ws://localhost:7448"
-    echo ""
-    echo "Run: wasm-pack test --headless --firefox -- --test session"
-    echo "     (while docker compose is up)"
+    wasm-pack test --headless --firefox -- --test e2e
 
     docker compose logs --tail=20
     docker compose down
-    echo "=== E2E test infrastructure torn down ==="
+    echo "=== E2E tests PASSED ==="
 }
 
 case "$TEST_TYPE" in

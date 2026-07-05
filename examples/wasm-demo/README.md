@@ -1,6 +1,11 @@
-# ros-z WASM Demo
+# hiroz (ros-z) WASM Demo — Single-threaded
 
-ros-z compiled to `wasm32-unknown-unknown`, running in the browser, communicating bidirectionally with a ROS 2 Jazzy system via rmw_zenoh.
+hiroz (formerly ros-z) compiled to `wasm32-unknown-unknown`, running in the browser, communicating bidirectionally with a ROS 2 Jazzy system via rmw_zenoh.
+
+This is the **single-threaded** variant (stable toolchain, wasm-pack tests).
+The **multi-threaded** variant (SharedArrayBuffer threadpool, interactive
+page) lives in [`../wasm-demo-threaded/`](../wasm-demo-threaded/README.md)
+and reuses this directory's docker compose stack.
 
 ## Architecture
 
@@ -67,7 +72,7 @@ docker compose down
 
 ## Changes to ros-z for WASM
 
-All changes are in `crates/ros-z/`:
+All changes are in `crates/hiroz/` (formerly `ros-z`):
 
 - `src/compat.rs` (new) - parking_lot API wrapper over std::sync for WASM
 - `Cargo.toml` - Platform-split deps (parking_lot, tokio, zenoh features, uuid/js)
