@@ -31,12 +31,21 @@
 </head>
 <body>
 <h1>hiroz // browser &harr; ROS 2 (threaded WASM)</h1>
-<p id="status">idle — click connect (needs zenoh router on ws://127.0.0.1:7448 + ROS 2 stack)</p>
+<p id="status">idle — set the router endpoint and click connect (needs a zenoh router + ROS 2 nodes via rmw_zenoh)</p>
 <div class="row">
   <div class="panel">
     <h2>control</h2>
-    <button id="connect">connect</button>
-    <div style="margin-top:1rem">
+    <div style="margin-bottom:1rem">
+      <input id="endpoint" placeholder="zenoh router endpoint" value="ws/127.0.0.1:7448">
+      <button id="connect">connect</button>
+      <div style="color:var(--dim);font-size:.75rem;margin-top:.3rem">
+        format: <code>ws/host:port</code> or <code>wss/host:port</code> —
+        on an https page, plain <code>ws/</code> only works for
+        127.0.0.1/localhost (mixed content); remote routers need
+        <code>wss/</code>.
+      </div>
+    </div>
+    <div>
       <input id="msg" placeholder="message for /chatter" value="Hello from the browser!">
       <button id="send" disabled>publish</button>
     </div>
@@ -62,13 +71,19 @@ const setStatus = (txt, cls) => { $('status').textContent = txt; $('status').cla
   await wasm_bindgen('./pkg/hiroz_wasm_demo_threaded_bg.wasm');
 
   $('connect').onclick = () => {
+    const endpoint = $('endpoint').value.trim();
+    if (!/^wss?\//.test(endpoint)) {
+      setStatus('endpoint must start with ws/ or wss/', 'err');
+      return;
+    }
     $('connect').disabled = true;
+    $('endpoint').disabled = true;
     if (!wasm_bindgen.ros_start('./pkg/hiroz_wasm_demo_threaded.js')) {
       setStatus('SharedArrayBuffer unavailable — serve with COOP/COEP headers', 'err');
       return;
     }
-    setStatus('connecting…');
-    wasm_bindgen.ros_connect('ws/127.0.0.1:7448');
+    setStatus('connecting to ' + endpoint + '…');
+    wasm_bindgen.ros_connect(endpoint);
     setInterval(() => {
       const st = wasm_bindgen.ros_poll_status();
       if (st === 'CONNECTED') { setStatus('connected — node wasm_threaded_browser live', 'ok'); $('send').disabled = false; }
