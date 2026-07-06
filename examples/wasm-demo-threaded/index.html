@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <title>hiroz // browser ↔ ROS 2</title>
+<!-- COOP/COEP shim for hosts that can't send the headers (e.g. GitHub Pages);
+     no-op when the server already provides cross-origin isolation -->
+<script src="coi-serviceworker.js"></script>
 <style>
   :root { --bg:#101210; --panel:#181b18; --fg:#d8dcd8; --dim:#7a807a;
           --accent:#ff6a00; --ok:#4ade80; --err:#f87171; }
