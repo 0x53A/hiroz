@@ -59,6 +59,18 @@ docker compose logs ros2 | grep "threaded WASM"
 
 ## Notes
 
+- **Router version:** the WASM client is built from zenoh 1.9.0 plus a
+  handful of post-release upstream commits, and the **1.9.0 release router
+  closes its handshake** ("WebSocket connection closed by remote").
+  Routers that work: 1.8.x and dev builds ≥ the client's upstream base
+  (the compose file pins `eclipse/zenoh:1.9.0-47-g55263c9da`).
+- **Chrome + public pages:** since ~Chrome 138, connecting from a public
+  (https) page to `ws/127.0.0.1` triggers the Local Network Access
+  permission prompt; headless Chrome denies it silently. Local pages
+  (`http://localhost`) and Firefox are unaffected.
+- rmw_zenoh sessions don't survive a router restart — restart the `ros2`
+  container too (`docker compose restart ros2`) if you bounce the router.
+
 - `node_modules` is a symlink into `zenoh-wasm/examples/wasm-threaded`
   (puppeteer-core only, used by the headless runner).
 - If `ros_start` returns false, the page isn't cross-origin isolated —
