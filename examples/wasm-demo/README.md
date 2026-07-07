@@ -59,15 +59,19 @@ docker compose logs ros2 | grep "threaded WASM"
 
 ## Notes
 
-- **Router version:** the WASM client is built from zenoh 1.9.0 plus a
-  handful of post-release upstream commits, and the **1.9.0 release router
-  closes its handshake** ("WebSocket connection closed by remote").
-  Routers that work: 1.8.x and dev builds ≥ the client's upstream base
-  (the compose file pins `eclipse/zenoh:1.9.0-47-g55263c9da`).
-- **Chrome + public pages:** since ~Chrome 138, connecting from a public
-  (https) page to `ws/127.0.0.1` triggers the Local Network Access
-  permission prompt; headless Chrome denies it silently. Local pages
-  (`http://localhost`) and Firefox are unaffected.
+- **zenoh ws-listener DoS (`BUGREPORT-ws-listener-dies.md` in the zenoh
+  fork):** any connection that fails the WebSocket handshake — a port scan,
+  a `curl`, or a browser that gives up mid-upgrade — **permanently kills the
+  ws accept loop**. The process keeps running and keeps serving `tcp/7447`,
+  so it looks like a client-side or mixed-content problem. If browsers stop
+  connecting but ROS 2 keeps chattering, restart the router
+  (`docker compose restart zenoh-router`). This is stock upstream zenoh
+  behaviour, independent of version.
+- **Chrome + public pages:** from a public (https) page — e.g. the GitHub
+  Pages demo — connecting to `ws/127.0.0.1` triggers Chrome's Local Network
+  Access permission prompt; accept it. Headless Chrome denies it silently
+  (and that denied handshake trips the DoS above). Local pages
+  (`http://localhost`, via `serve.py`) and Firefox are unaffected.
 - rmw_zenoh sessions don't survive a router restart — restart the `ros2`
   container too (`docker compose restart ros2`) if you bounce the router.
 
