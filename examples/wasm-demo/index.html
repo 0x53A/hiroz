@@ -58,7 +58,7 @@
     <div id="feed"></div>
   </div>
 </div>
-<script src="./pkg/hiroz_wasm_demo_threaded.js"></script>
+<script src="./pkg/hiroz_wasm_demo.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const feed = line => {
@@ -71,7 +71,7 @@ const feed = line => {
 const setStatus = (txt, cls) => { $('status').textContent = txt; $('status').className = cls || ''; };
 
 (async () => {
-  await wasm_bindgen('./pkg/hiroz_wasm_demo_threaded_bg.wasm');
+  await wasm_bindgen('./pkg/hiroz_wasm_demo_bg.wasm');
 
   $('connect').onclick = () => {
     const endpoint = $('endpoint').value.trim();
@@ -81,7 +81,7 @@ const setStatus = (txt, cls) => { $('status').textContent = txt; $('status').cla
     }
     $('connect').disabled = true;
     $('endpoint').disabled = true;
-    if (!wasm_bindgen.ros_start('./pkg/hiroz_wasm_demo_threaded.js')) {
+    if (!wasm_bindgen.ros_start('./pkg/hiroz_wasm_demo.js')) {
       setStatus('SharedArrayBuffer unavailable — serve with COOP/COEP headers', 'err');
       return;
     }

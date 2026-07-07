@@ -7,7 +7,7 @@ edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 
 [dependencies]
 hiroz = { path = "../../crates/hiroz", default-features = false, features = [
@@ -15,6 +15,11 @@ hiroz = { path = "../../crates/hiroz", default-features = false, features = [
   "rmw-zenoh",
 ] }
 hiroz-cdr = { path = "../../crates/hiroz-cdr" }
+# std_msgs::String generated from the vendored message definitions
+# (type name + RIHS01 hash computed by hiroz-codegen at build time)
+hiroz-msgs = { path = "../../crates/hiroz-msgs", default-features = false, features = [
+  "std_msgs",
+] }
 hiroz-protocol = { path = "../../crates/hiroz-protocol", default-features = false, features = [
   "std",
   "rmw-zenoh",
@@ -24,36 +29,25 @@ zenoh = { path = "../../../zenoh-wasm/zenoh", default-features = false, features
   "transport_ws",
   "unstable",
 ] }
-zenoh-ext = { path = "../../../zenoh-wasm/zenoh-ext", default-features = false }
-zenoh-buffers = { path = "../../../zenoh-wasm/commons/zenoh-buffers" }
+# wasm-threads turns on the SharedArrayBuffer threadpool (LocalExecutor workers)
+zenoh-runtime = { path = "../../../zenoh-wasm/commons/zenoh-runtime", features = [
+  "wasm-threads",
+] }
 
 flume = "0.11"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
   "console",
   "Document",
-  "DedicatedWorkerGlobalScope",
   "Element",
-  "ErrorEvent",
   "HtmlElement",
-  "MessageEvent",
   "Window",
-  "Worker",
-  "WorkerOptions",
-  "WorkerType",
 ] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
-tracing-web = "0.1"
-byteorder = "1.3"
-
-[dev-dependencies]
-wasm-bindgen-test = "0.3"
-futures-lite = "2"
+tracing-wasm = "0.2"
 
 [patch.crates-io]
 zenoh = { path = "../../../zenoh-wasm/zenoh" }

@@ -12,11 +12,11 @@ WASM_BINDGEN="${WASM_BINDGEN:-wasm-bindgen}"
 "$WASM_BINDGEN" \
   --target no-modules \
   --out-dir pkg \
-  target/wasm32-unknown-unknown/release/hiroz_wasm_demo_threaded.wasm
+  target/wasm32-unknown-unknown/release/hiroz_wasm_demo.wasm
 
 echo ""
 echo "Build complete. Run:"
-echo "  cd ../wasm-demo && docker compose up -d   # ROS 2 stack + router"
+echo "  docker compose up -d                       # ROS 2 stack + router"
 echo "  python3 serve.py 8083                      # COEP server"
 echo "  node run_headless.mjs                      # automated test"
 echo "  # or open http://localhost:8083 for the interactive page"

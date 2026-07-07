@@ -1,118 +1,43 @@
 #!/usr/bin/env bash
+# Build the demo, bring up the ROS 2 docker stack, and run the headless
+# end-to-end test (browser ↔ zenoh router ↔ ROS 2 Jazzy via rmw_zenoh).
+#
+# Usage: ./run-tests.sh [--keep-stack]
+#   --keep-stack   leave the docker compose stack running afterwards
+#
+# Requirements: nightly Rust, wasm-bindgen-cli 0.2.126, docker compose,
+#               python3, node + puppeteer-core, Chrome.
 set -euo pipefail
+cd "$(dirname "$0")"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
-
-usage() {
-    echo "Usage: $0 [basic|session|e2e|all]"
-    echo ""
-    echo "  basic   - Run offline tests (CDR, key expressions, config)"
-    echo "  session - Run session tests against local zenoh router (starts/stops router)"
-    echo "  e2e     - Run end-to-end tests against ROS 2 Jazzy via Docker"
-    echo "  all     - Run all tests"
-    echo ""
-    echo "Requirements:"
-    echo "  basic:   wasm-pack, geckodriver, firefox"
-    echo "  session: wasm-pack, geckodriver, firefox, zenohd (or docker)"
-    echo "  e2e:     wasm-pack, geckodriver, firefox, docker compose"
-    exit 1
-}
-
-TEST_TYPE="${1:-all}"
-
-ZENOHD_PID=""
+KEEP_STACK="${1:-}"
+SERVE_PID=""
 cleanup() {
-    if [ -n "$ZENOHD_PID" ]; then
-        echo "Stopping zenoh router (PID $ZENOHD_PID)..."
-        kill "$ZENOHD_PID" 2>/dev/null || true
-        wait "$ZENOHD_PID" 2>/dev/null || true
+    [ -n "$SERVE_PID" ] && kill "$SERVE_PID" 2>/dev/null || true
+    if [ "$KEEP_STACK" != "--keep-stack" ]; then
+        docker compose down
     fi
 }
 trap cleanup EXIT
 
-start_router() {
-    echo "Starting zenoh router on ws/127.0.0.1:7448..."
+./build.sh
 
-    # Try local zenohd first, fall back to Docker
-    if command -v zenohd &>/dev/null; then
-        zenohd --no-multicast-scouting -l ws/0.0.0.0:7448 &
-        ZENOHD_PID=$!
-    elif command -v docker &>/dev/null; then
-        docker run -d --rm --name zenoh-test-router \
-            -p 7447:7447 -p 7448:7448 \
-            eclipse/zenoh:1.8.0 \
-            --no-multicast-scouting --listen tcp/0.0.0.0:7447 --listen ws/0.0.0.0:7448
-        ZENOHD_PID="docker"
-    else
-        echo "ERROR: Neither zenohd nor docker found. Cannot start router."
-        exit 1
-    fi
+echo "=== Starting ROS 2 stack (zenoh router + Jazzy talker/listener) ==="
+docker compose up -d --wait
+echo "Waiting for ROS 2 nodes..."
+sleep 8
 
-    # Wait for router to be ready
-    echo "Waiting for router..."
-    sleep 2
-}
+python3 serve.py 8083 &
+SERVE_PID=$!
+for _ in $(seq 20); do
+    python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8083), 1)' 2>/dev/null && break
+    sleep 0.5
+done
 
-stop_router() {
-    if [ "$ZENOHD_PID" = "docker" ]; then
-        echo "Stopping Docker zenoh router..."
-        docker stop zenoh-test-router 2>/dev/null || true
-        ZENOHD_PID=""
-    elif [ -n "$ZENOHD_PID" ]; then
-        echo "Stopping zenoh router..."
-        kill "$ZENOHD_PID" 2>/dev/null || true
-        wait "$ZENOHD_PID" 2>/dev/null || true
-        ZENOHD_PID=""
-    fi
-}
-
-run_basic() {
-    echo "=== Running basic (offline) tests ==="
-    wasm-pack test --headless --firefox -- --test basic
-    echo "=== Basic tests PASSED ==="
-}
-
-run_session() {
-    echo "=== Running session tests (ros-z over WebSocket) ==="
-    start_router
-    wasm-pack test --headless --firefox -- --test session
-    stop_router
-    echo "=== Session tests PASSED ==="
-}
-
-run_e2e() {
-    echo "=== Running end-to-end tests (ros-z WASM <-> ROS 2 Jazzy) ==="
-    echo "Building ROS 2 Docker image (this may take a while on first run)..."
-    docker compose up -d
-    echo "Waiting for ROS 2 nodes to start..."
-    sleep 10
-
-    wasm-pack test --headless --firefox -- --test e2e
-
-    docker compose logs --tail=20
-    docker compose down
-    echo "=== E2E tests PASSED ==="
-}
-
-case "$TEST_TYPE" in
-    basic)
-        run_basic
-        ;;
-    session)
-        run_session
-        ;;
-    e2e)
-        run_e2e
-        ;;
-    all)
-        run_basic
-        run_session
-        ;;
-    *)
-        usage
-        ;;
-esac
+node run_headless.mjs 60
 
 echo ""
-echo "All requested tests completed successfully."
+echo "=== browser → ROS 2 direction (listener log) ==="
+docker compose logs ros2 2>&1 | grep "threaded WASM" | tail -3 \
+    || { echo "FAIL: listener never heard the browser's message"; exit 1; }
+echo "OK"

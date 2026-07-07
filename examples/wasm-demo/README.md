@@ -1,89 +1,67 @@
-# hiroz (ros-z) WASM Demo — Single-threaded
+# hiroz WASM Demo
 
-hiroz (formerly ros-z) compiled to `wasm32-unknown-unknown`, running in the browser, communicating bidirectionally with a ROS 2 Jazzy system via rmw_zenoh.
+hiroz (ros-z) compiled to multi-threaded WebAssembly (`wasm-threads` feature of
+the zenoh fork): SharedArrayBuffer Web Workers running pure-Rust executors,
+talking to a ROS 2 Jazzy system via rmw_zenoh. Verified bidirectional:
 
-This is the **single-threaded** variant (stable toolchain, wasm-pack tests).
-The **multi-threaded** variant (SharedArrayBuffer threadpool, interactive
-page) lives in [`../wasm-demo-threaded/`](../wasm-demo-threaded/README.md)
-and reuses this directory's docker compose stack.
+- ROS 2 `talker` → rmw_zenoh → zenoh router → **browser subscriber** (threadpool worker)
+- **Browser publisher** → zenoh router → rmw_zenoh → ROS 2 `listener`
+  (`[listener]: I heard: [Hello from threaded WASM hiroz!]`)
+
+Live instance: <https://0x53a.github.io/hiroz-web/hiroz/>
 
 ## Architecture
 
 ```
-Browser (WASM)          Zenoh Router          ROS 2 Jazzy
-+-------------+        +------------+        +------------------+
-| ros-z       |  WS    |            |  TCP   | rmw_zenoh_cpp    |
-| ZContext    |------->|  zenohd    |<------>| demo_nodes_cpp   |
-| ZNode       |  7448  |            |  7447  | talker / listener|
-| ZPub / ZSub |        +------------+        +------------------+
-+-------------+
+Browser tab
+  main thread  ── flume channels ──►  Application worker (LocalExecutor)
+  (UI, polls)                           zenoh session + hiroz node
+                                        sub + pub on /chatter
+                                              │ (TX/RX/Net workers, Acceptor I/O worker)
+                                              ▼ WebSocket :7448
+                                        zenoh router (docker)
+                                              ▼ TCP :7447
+                                        ROS 2 Jazzy + rmw_zenoh_cpp (docker)
+                                        demo_nodes_cpp talker / listener
 ```
 
-## Running Tests
+The whole ROS stack lives in one task on the Application worker; the main
+thread only moves strings through flume channels (`ros_poll`/`ros_publish`).
+Nothing on the main thread ever blocks.
 
-Requirements: `wasm-pack`, `geckodriver`, `firefox`, `docker compose`
+`std_msgs/String` comes from `hiroz-msgs` (generated at build time from the
+vendored message definitions, including the RIHS01 type hash) — no hand-written
+message types.
+
+## Build & run
+
+Requires nightly Rust (build-std; flags in `.cargo/config.toml`) and
+`wasm-bindgen-cli` matching the crate version in Cargo.lock:
 
 ```sh
-# Basic tests (offline - CDR, key expressions, config)
-nix-shell -p geckodriver --run "wasm-pack test --headless --firefox -- --test basic"
+cargo install wasm-bindgen-cli --version 0.2.126
 
-# Session tests (needs zenoh router on ws/127.0.0.1:7448)
-docker run -d --rm --name zenoh-router -p 7448:7448 eclipse/zenoh:1.8.0 \
-    --no-multicast-scouting --listen ws/0.0.0.0:7448
-nix-shell -p geckodriver --run "wasm-pack test --headless --firefox -- --test session"
-docker stop zenoh-router
+# everything below in one go: build, docker stack, headless e2e test
+./run-tests.sh
 
-# E2E tests (needs zenoh router + ROS 2 Jazzy with rmw_zenoh)
-docker compose up -d
-sleep 10  # wait for ROS 2 nodes to start
-nix-shell -p geckodriver --run "wasm-pack test --headless --firefox -- --test e2e"
-docker compose down
+# — or step by step —
+./build.sh
+docker compose up -d          # zenoh router + ROS 2 Jazzy talker/listener
+python3 serve.py 8083         # COOP/COEP server (SharedArrayBuffer)
+node run_headless.mjs         # automated test (headless Chrome)
 
-# Or use the helper script
-./run-tests.sh basic
-./run-tests.sh session
-./run-tests.sh e2e
+# Verify the browser→ROS direction in the listener's log:
+docker compose logs ros2 | grep "threaded WASM"
+
+# Interactive page: open http://localhost:8083 — connect, watch the live
+# /chatter feed from the ROS 2 talker, publish your own messages.
 ```
 
-## Test Summary
+## Notes
 
-| Test | What it proves |
-|------|----------------|
-| `cdr_roundtrip` | CDR serialization/deserialization works in WASM |
-| `cdr_empty_string` | Edge case: empty string CDR roundtrip |
-| `message_type_info` | Correct DDS type name for std_msgs/msg/String |
-| `zenoh_config_for_ws` | WebSocket endpoint config creation |
-| `rmw_zenoh_key_expression` | rmw_zenoh key expression format generation |
-| `context_builder_creation` | ZContextBuilder instantiation |
-| `rosz_session_open` | Open zenoh session + create ros-z node over WebSocket |
-| `rosz_pubsub_roundtrip` | Full ros-z pub/sub stack through zenoh router |
-| `subscribe_to_ros2_chatter` | Receive messages from ROS 2 Jazzy talker |
-| `publish_to_ros2_chatter` | Send messages to ROS 2 Jazzy listener |
-
-## Key Files
-
-- `src/messages.rs` - Manual `std_msgs/msg/String` definition with Jazzy RIHS01 type hash
-- `src/lib.rs` - WASM entry point
-- `tests/basic.rs` - Offline tests
-- `tests/session.rs` - Session tests (zenoh router required)
-- `tests/e2e.rs` - End-to-end tests (ROS 2 Jazzy + rmw_zenoh required)
-- `docker-compose.yml` - zenoh router + ROS 2 Jazzy stack
-- `Dockerfile.ros2` - ROS 2 Jazzy + rmw_zenoh built from source
-
-## Changes to ros-z for WASM
-
-All changes are in `crates/hiroz/` (formerly `ros-z`):
-
-- `src/compat.rs` (new) - parking_lot API wrapper over std::sync for WASM
-- `Cargo.toml` - Platform-split deps (parking_lot, tokio, zenoh features, uuid/js)
-- `src/lib.rs` - Gate `shm` module on non-WASM
-- `src/context.rs` - Added `build_async()` for WASM session creation
-- `src/time.rs` - `js_sys::Date::now()` instead of `SystemTime::now()` on WASM
-- `src/graph.rs` - Skip blocking liveliness query on WASM
-- `src/{pubsub,service,node,msg,zbuf,cache,queue,action/*}.rs` - cfg gates for shm, parking_lot, tokio_util
-
-## Changes to zenoh-wasm
-
-- `zenoh-ext/Cargo.toml` - Gate tokio `io-std` behind non-WASM
-- `zenoh/src/lib.rs` - Gate `zenoh_home`, `LibLoader`, `Timer` exports
-- `io/zenoh-transport/src/unicast/universal/tx.rs` - Gate `BlockFirst` congestion control
+- `node_modules` is a symlink into `zenoh-wasm/examples/wasm-threaded`
+  (puppeteer-core only, used by the headless runner).
+- If `ros_start` returns false, the page isn't cross-origin isolated —
+  serve it through `serve.py`, not a plain HTTP server. On hosts that can't
+  send COOP/COEP headers (e.g. GitHub Pages) the page falls back to the
+  `coi-serviceworker.js` shim.

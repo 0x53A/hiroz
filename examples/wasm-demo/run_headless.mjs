@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Headless Chrome runner for the threaded hiroz <-> ROS 2 test.
 // Prerequisites: COEP server (python3 serve.py 8083), docker compose stack
-// from ../wasm-demo (zenoh router + ROS 2 Jazzy talker/listener).
+// in this directory (zenoh router + ROS 2 Jazzy talker/listener).
 
 import puppeteer from 'puppeteer-core';
 
