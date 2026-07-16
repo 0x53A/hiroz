@@ -1251,7 +1251,7 @@ dependencies = [
  "sha2",
  "slab",
  "strum 0.27.2",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1269,7 +1269,7 @@ dependencies = [
  "byteorder",
  "proptest",
  "serde",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
  "zenoh-buffers",
 ]
 
@@ -1855,6 +1855,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
 dependencies = [
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "lru"
+version = "0.16.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
+dependencies = [
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -2541,7 +2550,7 @@ dependencies = [
  "indoc",
  "instability",
  "itertools 0.13.0",
- "lru",
+ "lru 0.12.5",
  "paste",
  "strum 0.26.3",
  "unicode-segmentation",
@@ -2626,6 +2635,15 @@ checksum = "8d3e7aa0a681b232e7cd7f856a53b10603df88ca74b79a8d8088845185492e35"
 dependencies = [
  "array-init",
  "crossbeam",
+]
+
+[[package]]
+name = "rlimit"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7043b63bd0cd1aaa628e476b80e6d4023a3b50eb32789f2728908107bd0c793a"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -3145,9 +3163,9 @@ checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
 
 [[package]]
 name = "stabby"
-version = "72.1.1"
+version = "72.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "976399a0c48ea769ef7f5dc303bb88240ab8d84008647a6b2303eced3dab3945"
+checksum = "a7b834ec7ced12095fea1e4b07dcb7e8cf2b59b18afa3eac52494d835965a5ec"
 dependencies = [
  "rustversion",
  "stabby-abi",
@@ -3155,9 +3173,9 @@ dependencies = [
 
 [[package]]
 name = "stabby-abi"
-version = "72.1.1"
+version = "72.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7b54832a9a1f92a0e55e74a5c0332744426edc515bb3fbad82f10b874a87f0d"
+checksum = "ff1a4f477858a5bdf927c9fab7f579899de9b13e39f8b3b3b300c89fbab632f4"
 dependencies = [
  "rustc_version",
  "rustversion",
@@ -3167,15 +3185,14 @@ dependencies = [
 
 [[package]]
 name = "stabby-macros"
-version = "72.1.1"
+version = "72.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a768b1e51e4dbfa4fa52ae5c01241c0a41e2938fdffbb84add0c8238092f9091"
+checksum = "b31c4b2434980b67ad83f300a58088ba14d59454dcd79ba3d87419bbd924d31e"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "rand 0.8.6",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -4506,13 +4523,14 @@ dependencies = [
 name = "zenoh-ext"
 version = "1.9.0"
 dependencies = [
- "async-trait",
  "bincode",
  "flume",
  "futures",
  "leb128",
+ "lru 0.16.4",
  "serde",
  "tokio",
+ "tokio-util",
  "tracing",
  "uhlc",
  "zenoh",
@@ -4682,12 +4700,12 @@ dependencies = [
  "advisory-lock",
  "async-trait",
  "buddy_system_allocator",
- "cfg_aliases 0.2.1",
  "crossbeam-channel",
  "crossbeam-queue",
  "nix",
  "num-traits",
  "rand 0.8.6",
+ "rlimit",
  "stabby",
  "static_assertions",
  "static_init",
