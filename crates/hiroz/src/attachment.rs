@@ -1,7 +1,7 @@
 use zenoh::bytes::ZBytes;
 use zenoh_ext::{ZDeserializer, ZSerializer};
 
-use crate::time::{ZClock, ZTime};
+use crate::time::{ZClock, ZTime, system_time_now};
 
 const RMW_GID_STORAGE_SIZE: usize = 16;
 
@@ -19,7 +19,7 @@ impl Attachment {
         Self::with_source_time(
             sn,
             gid,
-            ZTime::from_system_time(std::time::SystemTime::now()),
+            ZTime::from_system_time(system_time_now()),
         )
     }
 

@@ -108,6 +108,17 @@ impl ZTime {
     }
 }
 
+pub(crate) fn system_time_now() -> SystemTime {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        SystemTime::now()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        UNIX_EPOCH + Duration::from_millis(js_sys::Date::now() as u64)
+    }
+}
+
 impl Default for ZTime {
     fn default() -> Self {
         Self::zero()
@@ -195,7 +206,7 @@ impl ZClock {
             ClockInner::System => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    ZTime::from_system_time(SystemTime::now())
+                    ZTime::from_system_time(system_time_now())
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -242,7 +253,7 @@ impl ZClock {
         match self.inner.as_ref() {
             #[cfg(not(target_arch = "wasm32"))]
             ClockInner::System => {
-                let now = SystemTime::now();
+                let now = system_time_now();
                 let deadline = deadline.to_system_time();
                 let duration = deadline.duration_since(now).unwrap_or(Duration::ZERO);
                 ZSleep(Box::pin(tokio::time::sleep(duration)))

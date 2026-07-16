@@ -1,4 +1,5 @@
 use crate::msg::ZMessage;
+use crate::time::system_time_now;
 use hiroz_cdr::{CdrBuffer, CdrDeserialize, CdrReader, CdrSerialize, CdrSerializedSize, CdrWriter};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -285,7 +286,7 @@ pub struct Time {
 impl Time {
     /// Creates a Time from the current system time
     pub fn now() -> Self {
-        let duration = SystemTime::now()
+        let duration = system_time_now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
         Self {

@@ -4535,6 +4535,7 @@ dependencies = [
  "uhlc",
  "zenoh",
  "zenoh-macros",
+ "zenoh-runtime",
  "zenoh-util",
 ]
 

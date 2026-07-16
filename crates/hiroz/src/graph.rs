@@ -16,6 +16,7 @@ use crate::entity::{
     Entity, LivelinessKE, NodeKey, Topic, action_name_from_topic,
 };
 use crate::event::GraphEventManager;
+use crate::time::system_time_now;
 use tracing;
 use zenoh::{Result, Session, Wait, pubsub::Subscriber, sample::SampleKind, session::ZenohId};
 
@@ -1324,7 +1325,7 @@ impl Graph {
             .collect();
 
         GraphSnapshot {
-            timestamp: SystemTime::now(),
+            timestamp: system_time_now(),
             domain_id,
             topics,
             nodes,

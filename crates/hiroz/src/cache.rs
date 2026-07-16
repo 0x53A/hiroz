@@ -363,7 +363,7 @@ where
                                     guard.warned_no_ts = true;
                                 }
                                 drop(guard);
-                                SystemTime::now()
+                                crate::time::system_time_now()
                             }
                         };
                         inner_cb.write().insert(stamp, msg);
