@@ -463,7 +463,7 @@ impl Graph {
         })
     }
 
-    async fn wait_until<F>(&self, timeout: Duration, predicate: F) -> bool
+    pub(crate) async fn wait_until<F>(&self, timeout: Duration, predicate: F) -> bool
     where
         F: Fn(&Self) -> bool,
     {
@@ -486,6 +486,78 @@ impl Graph {
                 .is_err()
             {
                 return predicate(self);
+            }
+        }
+    }
+
+    /// True if the graph holds any entity whose owning node zid is not in
+    /// `exclude`. A multi-session process (e.g. `hu`) sees its own tokens echoed
+    /// back; passing its own session zids as `exclude` distinguishes a genuine
+    /// external participant from only-our-own-tokens, which emptiness cannot.
+    pub fn has_external_entity(&self, exclude: &[ZenohId]) -> bool {
+        let mut data = self.data.lock();
+        if !data.cached.is_empty() {
+            data.parse();
+        }
+        data.parsed.values().any(|entity| match &**entity {
+            Entity::Node(node) => !exclude.contains(&node.z_id),
+            Entity::Endpoint(endpoint) => match endpoint.node.as_ref() {
+                Some(node) => !exclude.contains(&node.z_id),
+                // No node identity means no zid to match — treat as external.
+                None => true,
+            },
+        })
+    }
+
+    /// Barrier for one-shot `hu` commands before they snapshot the graph: wait for
+    /// an external participant, then for the graph to go quiet (waiting for quiet
+    /// alone can read a not-yet-populated graph as settled). `exclude` is the
+    /// caller's own session zids, so echoed self-tokens don't count.
+    ///
+    /// Returns `true` once an external entity is present and the graph has gone
+    /// quiet for `quiet` (or `timeout` elapsed with it still present). Returns
+    /// `false` only if `timeout` elapsed with no external entity.
+    pub async fn wait_for_external_settled(
+        &self,
+        exclude: &[ZenohId],
+        quiet: Duration,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        // Phase 1: block until at least one external entity appears.
+        loop {
+            let notified = self.change_notify.notified();
+            tokio::pin!(notified);
+            if self.has_external_entity(exclude) {
+                break;
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            if tokio::time::timeout(remaining, &mut notified)
+                .await
+                .is_err()
+            {
+                return self.has_external_entity(exclude);
+            }
+        }
+        // Phase 2: an external entity is present; wait for the graph to go quiet
+        // so a multi-endpoint participant is fully reflected, capped at the
+        // deadline.
+        loop {
+            let notified = self.change_notify.notified();
+            tokio::pin!(notified);
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return true;
+            }
+            let quiet_window = quiet.min(remaining);
+            if tokio::time::timeout(quiet_window, &mut notified)
+                .await
+                .is_err()
+            {
+                return true;
             }
         }
     }

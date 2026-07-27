@@ -11,7 +11,7 @@ use crate::{
     cache::ZCacheBuilder,
     context::{GlobalCounter, RemapRules},
     dynamic::{
-        DiscoveredTopicSchema, DynPubBuilder, DynSub, DynSubBuilder, DynamicMessage,
+        DiscoveredTopicSchema, DynPubBuilder, DynSub, DynSubBuilder, DynamicError, DynamicMessage,
         DynamicSerdeCdrSerdes, MessageSchema, SchemaDiscovery, TypeDescriptionService,
         discovered_schema_type_info, schema_type_info,
     },
@@ -23,6 +23,7 @@ use crate::{
         service::{ParameterService, ParameterServiceConfig},
     },
     pubsub::{ZPubBuilder, ZSubBuilder},
+    ros_msg::MessageTypeInfo,
     service::{ZClientBuilder, ZServerBuilder},
 };
 
@@ -254,6 +255,7 @@ impl Builder for ZNodeBuilder {
                 counter: &self.counter,
                 clock: &self.clock,
                 overrides: self.parameter_overrides,
+                type_desc_service: type_desc_service.as_ref(),
             })?;
             info!("[NOD] ParameterService created");
             Some(service)
@@ -433,8 +435,13 @@ impl ZNode {
         ZCacheBuilder::new(sub_builder, capacity)
     }
 
-    /// Create a service for the given service name
-    /// If T is a tuple (Req, Resp) where both implement WithTypeInfo, type information will be automatically populated
+    /// Create a service for the given service name.
+    ///
+    /// If the type-description service is enabled and the Request/Response types
+    /// carry a runtime schema (generated ROS 2 message types do), both are
+    /// registered with it so [`discover_service_schema`](ZNode::discover_service_schema)
+    /// can resolve them via live `get_type_description` queries; otherwise
+    /// discovery for this service won't resolve.
     ///
     /// The service name will be qualified according to ROS 2 rules:
     /// - Absolute service names (starting with '/') are used as-is
@@ -443,8 +450,19 @@ impl ZNode {
     pub fn create_service<T>(&self, name: &str) -> ZServerBuilder<T>
     where
         T: ZService + ServiceTypeInfo,
+        T::Request: WithTypeInfo,
+        T::Response: WithTypeInfo,
     {
         debug!("[NOD] Creating service: name={}", name);
+        // Mirror create_pub<T>'s auto-registration so discover_service_schema can
+        // resolve Request/Response via get_type_description instead of the
+        // (otherwise-empty) global SchemaRegistry.
+        if let Some(schema) = T::Request::message_schema() {
+            self.register_schema_with_type_description_service(&schema);
+        }
+        if let Some(schema) = T::Response::message_schema() {
+            self.register_schema_with_type_description_service(&schema);
+        }
         self.create_service_impl(name, Some(T::service_type_info()))
     }
 
@@ -1086,6 +1104,102 @@ impl ZNode {
             .discover(topic)
             .await
             .map_err(|e| zenoh::Error::from(e.to_string()))
+    }
+
+    /// Resolve a service's request and response schemas via live discovery.
+    ///
+    /// Service analogue of [`discover_topic_schema`](ZNode::discover_topic_schema):
+    /// finds a node serving `service_name` in the graph and queries its
+    /// `~get_type_description` service for `request_type_name` and
+    /// `response_type_name`. Type-hash validation is skipped (the caller usually
+    /// only has the service's composite hash, not the per-type hashes).
+    ///
+    /// # Arguments
+    ///
+    /// * `service_name` — qualified per the same rules as
+    ///   [`create_service`](ZNode::create_service)/[`create_client`](ZNode::create_client).
+    /// * `request_type_name` / `response_type_name` — the `msg`-namespaced schema
+    ///   names codegen registers, e.g. `example_interfaces/msg/AddTwoIntsRequest`
+    ///   (not `/srv/`-namespaced).
+    /// * `timeout` — applied per phase (the graph wait, then each of the two
+    ///   `get_type_description` calls), so worst-case is `3 * timeout`.
+    pub async fn discover_service_schema(
+        &self,
+        service_name: &str,
+        request_type_name: &str,
+        response_type_name: &str,
+        timeout: Duration,
+    ) -> std::result::Result<(Arc<MessageSchema>, Arc<MessageSchema>), DynamicError> {
+        let qualified_service =
+            crate::topic_name::qualify_service_name(service_name, self.namespace(), self.name())
+                .map_err(|error| {
+                    DynamicError::SchemaNotFound(format!("Failed to qualify service name: {error}"))
+                })?;
+
+        // A serving node's liveliness token may not have reached our graph yet;
+        // wait (event-driven) for a service server that exposes a node identity —
+        // we need a concrete node to query for the type description.
+        self.graph
+            .wait_until(timeout, |g| {
+                g.get_entities_by_service(EndpointKind::Service, &qualified_service)
+                    .iter()
+                    .any(|e| matches!(e.as_ref(), Entity::Endpoint(ep) if ep.node.is_some()))
+            })
+            .await;
+
+        // Re-read once to extract the node, distinguishing "present but no node
+        // identity" from "no server at all" for a clearer error.
+        let entities = self
+            .graph
+            .get_entities_by_service(EndpointKind::Service, &qualified_service);
+        let mut saw_endpoint = false;
+        let found = entities.iter().find_map(|entity| match entity.as_ref() {
+            Entity::Endpoint(endpoint) => {
+                saw_endpoint = true;
+                endpoint.node.clone()
+            }
+            _ => None,
+        });
+        let node = match found {
+            Some(node) => node,
+            None if saw_endpoint => {
+                return Err(DynamicError::SchemaNotFound(format!(
+                    "Service server(s) for {} are present but expose no node \
+                     identity; cannot query their schema",
+                    qualified_service
+                )));
+            }
+            None => {
+                return Err(DynamicError::SchemaNotFound(format!(
+                    "No service server found for: {}",
+                    qualified_service
+                )));
+            }
+        };
+
+        let candidate = |type_name: &str| crate::dynamic::discovery::TopicSchemaCandidate {
+            node_name: node.name.clone(),
+            namespace: node.namespace.clone(),
+            type_name: type_name.to_string(),
+            type_hash: String::new(),
+        };
+
+        let (request_schema, _) = crate::dynamic::type_description_client::query_type_description(
+            self,
+            &candidate(request_type_name),
+            timeout,
+            false,
+        )
+        .await?;
+        let (response_schema, _) = crate::dynamic::type_description_client::query_type_description(
+            self,
+            &candidate(response_type_name),
+            timeout,
+            false,
+        )
+        .await?;
+
+        Ok((request_schema, response_schema))
     }
 
     /// Create a dynamic subscriber with automatic schema discovery.

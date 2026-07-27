@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ServiceTypeInfo;
 use crate::ZBuf;
+use crate::dynamic::{FieldType, MessageSchema, TypeDescriptionService};
 use crate::entity::{TypeHash, TypeInfo};
 use crate::msg::{SerdeCdrSerdes, ZMessage, ZService};
 
@@ -380,4 +381,247 @@ impl ZMessage for SetParametersAtomicallyResponse {
 }
 impl ZMessage for WireParameterEvent {
     type Serdes = SerdeCdrSerdes<Self>;
+}
+
+// ============================================================================
+// Type-description-service schema registration
+// ============================================================================
+//
+// These wire types are hand-written (no `MessageTypeInfo`) and `ParameterService`
+// builds its `ZServer`s directly, bypassing `ZNode::create_service`'s
+// auto-registration. Without explicit registration here, `discover_service_schema`
+// can't resolve the six built-in parameter services every hiroz node exposes.
+// Names follow codegen's `{pkg}/msg/{Name}Request`/`Response` convention.
+
+fn floating_point_range_schema()
+-> std::result::Result<std::sync::Arc<MessageSchema>, crate::dynamic::DynamicError> {
+    MessageSchema::builder("rcl_interfaces/msg/FloatingPointRange")
+        .field("from_value", FieldType::Float64)
+        .field("to_value", FieldType::Float64)
+        .field("step", FieldType::Float64)
+        .build()
+}
+
+fn integer_range_schema()
+-> std::result::Result<std::sync::Arc<MessageSchema>, crate::dynamic::DynamicError> {
+    MessageSchema::builder("rcl_interfaces/msg/IntegerRange")
+        .field("from_value", FieldType::Int64)
+        .field("to_value", FieldType::Int64)
+        .field("step", FieldType::Uint64)
+        .build()
+}
+
+fn parameter_value_schema()
+-> std::result::Result<std::sync::Arc<MessageSchema>, crate::dynamic::DynamicError> {
+    MessageSchema::builder("rcl_interfaces/msg/ParameterValue")
+        .field("type", FieldType::Uint8)
+        .field("bool_value", FieldType::Bool)
+        .field("integer_value", FieldType::Int64)
+        .field("double_value", FieldType::Float64)
+        .field("string_value", FieldType::String)
+        .field(
+            "byte_array_value",
+            FieldType::Sequence(Box::new(FieldType::Uint8)),
+        )
+        .field(
+            "bool_array_value",
+            FieldType::Sequence(Box::new(FieldType::Bool)),
+        )
+        .field(
+            "integer_array_value",
+            FieldType::Sequence(Box::new(FieldType::Int64)),
+        )
+        .field(
+            "double_array_value",
+            FieldType::Sequence(Box::new(FieldType::Float64)),
+        )
+        .field(
+            "string_array_value",
+            FieldType::Sequence(Box::new(FieldType::String)),
+        )
+        .build()
+}
+
+fn parameter_schema()
+-> std::result::Result<std::sync::Arc<MessageSchema>, crate::dynamic::DynamicError> {
+    let value = parameter_value_schema()?;
+    MessageSchema::builder("rcl_interfaces/msg/Parameter")
+        .field("name", FieldType::String)
+        .field("value", FieldType::Message(value))
+        .build()
+}
+
+fn parameter_descriptor_schema()
+-> std::result::Result<std::sync::Arc<MessageSchema>, crate::dynamic::DynamicError> {
+    let fp_range = floating_point_range_schema()?;
+    let int_range = integer_range_schema()?;
+    MessageSchema::builder("rcl_interfaces/msg/ParameterDescriptor")
+        .field("name", FieldType::String)
+        .field("type", FieldType::Uint8)
+        .field("description", FieldType::String)
+        .field("additional_constraints", FieldType::String)
+        .field("read_only", FieldType::Bool)
+        .field("dynamic_typing", FieldType::Bool)
+        // `[<=1]` in the real message, not unbounded — register as bounded so
+        // GetTypeDescription reports the true constraint.
+        .field(
+            "floating_point_range",
+            FieldType::BoundedSequence(Box::new(FieldType::Message(fp_range)), 1),
+        )
+        .field(
+            "integer_range",
+            FieldType::BoundedSequence(Box::new(FieldType::Message(int_range)), 1),
+        )
+        .build()
+}
+
+/// Schema for the `rcl_interfaces/msg/ParameterEvent` message that is
+/// implicitly published on `/parameter_events` by every parameterized node.
+fn parameter_event_schema()
+-> std::result::Result<std::sync::Arc<MessageSchema>, crate::dynamic::DynamicError> {
+    let parameter = parameter_schema()?;
+    let stamp = MessageSchema::builder("builtin_interfaces/msg/Time")
+        .field("sec", FieldType::Int32)
+        .field("nanosec", FieldType::Uint32)
+        .build()?;
+    MessageSchema::builder("rcl_interfaces/msg/ParameterEvent")
+        .field("stamp", FieldType::Message(stamp))
+        .field("node", FieldType::String)
+        .field(
+            "new_parameters",
+            FieldType::Sequence(Box::new(FieldType::Message(parameter.clone()))),
+        )
+        .field(
+            "changed_parameters",
+            FieldType::Sequence(Box::new(FieldType::Message(parameter.clone()))),
+        )
+        .field(
+            "deleted_parameters",
+            FieldType::Sequence(Box::new(FieldType::Message(parameter))),
+        )
+        .build()
+}
+
+fn set_parameters_result_schema()
+-> std::result::Result<std::sync::Arc<MessageSchema>, crate::dynamic::DynamicError> {
+    MessageSchema::builder("rcl_interfaces/msg/SetParametersResult")
+        .field("successful", FieldType::Bool)
+        .field("reason", FieldType::String)
+        .build()
+}
+
+fn list_parameters_result_schema()
+-> std::result::Result<std::sync::Arc<MessageSchema>, crate::dynamic::DynamicError> {
+    MessageSchema::builder("rcl_interfaces/msg/ListParametersResult")
+        .field("names", FieldType::Sequence(Box::new(FieldType::String)))
+        .field("prefixes", FieldType::Sequence(Box::new(FieldType::String)))
+        .build()
+}
+
+/// Register the request/response schemas for all 6 built-in `rcl_interfaces`
+/// parameter services with `tds`, so `ZNode::discover_service_schema` can
+/// resolve them for this node.
+///
+/// Best-effort: build/registration failures are logged and skipped rather than
+/// failing node startup (matches `register_schema_with_type_description_service`).
+pub(crate) fn register_parameter_schemas(tds: &TypeDescriptionService) {
+    let register = |result: std::result::Result<
+        std::sync::Arc<MessageSchema>,
+        crate::dynamic::DynamicError,
+    >| match result {
+        Ok(schema) => {
+            if let Err(error) = tds.register_schema(schema.clone()) {
+                tracing::warn!(
+                    "[PARAMS] Failed to register schema {} with type description service: {}",
+                    schema.type_name,
+                    error
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                "[PARAMS] Failed to build parameter service schema: {}",
+                error
+            );
+        }
+    };
+
+    let names_req = |type_name: &str| {
+        MessageSchema::builder(type_name)
+            .field("names", FieldType::Sequence(Box::new(FieldType::String)))
+            .build()
+    };
+
+    register(names_req("rcl_interfaces/msg/DescribeParametersRequest"));
+    register(parameter_descriptor_schema().and_then(|descriptor| {
+        MessageSchema::builder("rcl_interfaces/msg/DescribeParametersResponse")
+            .field(
+                "descriptors",
+                FieldType::Sequence(Box::new(FieldType::Message(descriptor))),
+            )
+            .build()
+    }));
+
+    register(names_req("rcl_interfaces/msg/GetParametersRequest"));
+    register(parameter_value_schema().and_then(|value| {
+        MessageSchema::builder("rcl_interfaces/msg/GetParametersResponse")
+            .field(
+                "values",
+                FieldType::Sequence(Box::new(FieldType::Message(value))),
+            )
+            .build()
+    }));
+
+    register(names_req("rcl_interfaces/msg/GetParameterTypesRequest"));
+    register(
+        MessageSchema::builder("rcl_interfaces/msg/GetParameterTypesResponse")
+            .field("types", FieldType::Sequence(Box::new(FieldType::Uint8)))
+            .build(),
+    );
+
+    register(
+        MessageSchema::builder("rcl_interfaces/msg/ListParametersRequest")
+            .field("prefixes", FieldType::Sequence(Box::new(FieldType::String)))
+            .field("depth", FieldType::Uint64)
+            .build(),
+    );
+    register(list_parameters_result_schema().and_then(|result| {
+        MessageSchema::builder("rcl_interfaces/msg/ListParametersResponse")
+            .field("result", FieldType::Message(result))
+            .build()
+    }));
+
+    let parameters_req = |type_name: &str| {
+        parameter_schema().and_then(|parameter| {
+            MessageSchema::builder(type_name)
+                .field(
+                    "parameters",
+                    FieldType::Sequence(Box::new(FieldType::Message(parameter))),
+                )
+                .build()
+        })
+    };
+
+    register(parameters_req("rcl_interfaces/msg/SetParametersRequest"));
+    register(set_parameters_result_schema().and_then(|result| {
+        MessageSchema::builder("rcl_interfaces/msg/SetParametersResponse")
+            .field(
+                "results",
+                FieldType::Sequence(Box::new(FieldType::Message(result))),
+            )
+            .build()
+    }));
+
+    register(parameters_req(
+        "rcl_interfaces/msg/SetParametersAtomicallyRequest",
+    ));
+    register(set_parameters_result_schema().and_then(|result| {
+        MessageSchema::builder("rcl_interfaces/msg/SetParametersAtomicallyResponse")
+            .field("result", FieldType::Message(result))
+            .build()
+    }));
+
+    // The implicitly-published `/parameter_events` topic
+    // (`rcl_interfaces/msg/ParameterEvent`).
+    register(parameter_event_schema());
 }
