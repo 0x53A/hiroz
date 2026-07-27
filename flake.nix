@@ -48,6 +48,12 @@
           ];
         };
 
+        # CI-only toolchain with the wasm32-wasip2 sysroot; kept separate so
+        # everyday shells skip the ~100-500 MB sysroot download.
+        rustToolchainWasm = rustToolchain.override {
+          targets = [ "wasm32-wasip2" ];
+        };
+
         rustfmtNightly = pkgs.rust-bin.nightly.latest.rustfmt;
 
         # Override rustfmt to use nightly
@@ -415,10 +421,42 @@
             '';
           };
 
-          # CI without ROS
+          # Like `pureRust` but with the wasm32-wasip2 target — for building hu
+          # WASM plugins locally (`nix develop .#pureRust-wasm` then
+          # `cargo hu-plugins`). The default `pureRust` shell stays lean (no
+          # wasm sysroot).
+          pureRust-wasm = mkDevShell {
+            name = "hiroz-pure-rust-wasm";
+            packages = [
+              rustfmt-nightly-bin
+              rustToolchainWasm
+            ]
+            ++ (builtins.filter (p: p != rustToolchain) commonBuildInputs)
+            ++ devTools
+            ++ pythonTools
+            ++ docTools
+            ++ testTools
+            ++ pre-commit-check.enabledPackages;
+            extraShellHook = preCommitGuard;
+            banner = ''
+              echo "🦀 hiroz development environment (pure Rust + wasm32-wasip2)"
+              echo "Rust: $(rustc --version)"
+              echo "wasm32-wasip2 target available for WASM plugin builds"
+            '';
+          };
+
+          # CI without ROS — includes wasm32-wasip2 sysroot for WASM plugin builds.
+          # Uses rustToolchainWasm so the WASM target is only fetched in CI, not
+          # in the default developer shell.
           pureRust-ci = mkDevShell {
             name = "hiroz-ci-pure-rust";
-            packages = commonBuildInputs ++ pythonTools ++ docTools ++ testTools;
+            packages =
+              # Replace the default rustToolchain with the WASM-capable variant.
+              [ rustToolchainWasm ]
+              ++ (builtins.filter (p: p != rustToolchain) commonBuildInputs)
+              ++ pythonTools
+              ++ docTools
+              ++ testTools;
             extraShellHook = '''';
           };
 

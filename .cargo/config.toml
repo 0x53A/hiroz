@@ -1,0 +1,4 @@
+# Aliases only — no change to build flags, targets, or RUSTFLAGS.
+[alias]
+# Build the hu WASM plugins from the repo root (append --release to optimize).
+hu-plugins = "build --manifest-path crates/hiroz-union/plugins/Cargo.toml --target wasm32-wasip2 --workspace"
