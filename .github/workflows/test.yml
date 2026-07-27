@@ -57,14 +57,53 @@ jobs:
     container:
       image: ${{ matrix.image }}
     steps:
+      - name: Compute weekly cache key
+        id: cache-week
+        run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Cache apt packages
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
           key: apt-${{ matrix.distro }}-v3-${{ hashFiles('.github/workflows/test.yml') }}
 
+      # The apt package-index fetch (not the downloads) is the mirror bottleneck
+      # here (~900 B/s), costing minutes per job. Cache the index; keyed weekly
+      # so it can't go permanently stale — a miss just re-fetches.
+      - name: Cache apt package lists
+        uses: actions/cache@v4
+        with:
+          path: /var/lib/apt/lists
+          key: apt-lists-${{ matrix.distro }}-${{ steps.cache-week.outputs.week }}
+          restore-keys: |
+            apt-lists-${{ matrix.distro }}-
+
+      # GitHub runners are on Azure, but the ROS base images point at the
+      # generic archive/security.ubuntu.com endpoints, which are slow from here
+      # (~75-900 B/s). Repoint to Azure's same-datacenter mirror. Handles both
+      # the legacy one-line sources.list and the newer deb822 *.sources format.
+      - name: Point apt at the Azure Ubuntu mirror
+        run: |
+          if [ -f /etc/apt/sources.list ]; then
+            sed -i \
+              -e 's|http://archive\.ubuntu\.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' \
+              -e 's|http://security\.ubuntu\.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' \
+              /etc/apt/sources.list
+          fi
+          # Guard with `ls`: with nullglob off, a non-matching glob expands to
+          # the literal pattern, so don't rely on the match itself.
+          if ls /etc/apt/sources.list.d/*.sources > /dev/null 2>&1; then
+            sed -i \
+              -e 's|http://archive\.ubuntu\.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' \
+              -e 's|http://security\.ubuntu\.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' \
+              /etc/apt/sources.list.d/*.sources
+          fi
+
       - name: Install system dependencies
-        run: apt-get update && apt-get install -y nodejs
+        run: |
+          # Install jq here so taiki-e/install-action's cargo-nextest step
+          # below doesn't trigger a second, redundant apt-get update for it.
+          apt-get update && apt-get install -y nodejs jq
 
       - name: Install Nushell
         run: |
@@ -123,6 +162,13 @@ jobs:
           else
             cargo nextest run -p hiroz-tests --profile interop \
               --features "ros-interop,$FEATURES"
+            # dynamic_subscriber tests are all #[ignore]'d in CI (ros2 topic
+            # pub isn't graph-visible under CI's rmw_zenoh_cpp — see
+            # headless_test.rs). --no-tests=warn keeps that from failing the job.
+            cargo nextest run -p hiroz-union --profile interop \
+              --features ros-interop \
+              -E 'test(dynamic_subscriber)' \
+              --no-tests=warn
           fi
 
       - uses: actions/setup-go@v5

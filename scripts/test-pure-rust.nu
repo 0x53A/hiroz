@@ -38,6 +38,12 @@ def check-hu [] {
     log-step "Check hiroz-union"
     run-cmd "cargo check -p hiroz-union"
     run-cmd "cargo clippy -p hiroz-union -- -D warnings"
+    log-step "Build WASM plugins (wasm32-wasip2)"
+    # Needs the wasm32-wasip2 sysroot: CI uses `.#pureRust-ci`; locally enter
+    # `.#pureRust-wasm` (the default `.#pureRust` shell omits it to stay lean).
+    run-cmd "cargo build --manifest-path crates/hiroz-union/plugins/Cargo.toml --target wasm32-wasip2 --workspace"
+    # Standalone build to mirror a third-party plugin author's setup.
+    run-cmd "cargo build --manifest-path crates/hiroz-union/plugins/hu-plugin-template/Cargo.toml --target wasm32-wasip2"
 }
 
 def clippy-hiroz-py [] {
@@ -47,7 +53,9 @@ def clippy-hiroz-py [] {
 
 def clippy-tests [] {
     log-step "Clippy (hiroz-tests, interop features)"
-    run-cmd "cargo clippy -p hiroz-tests --all-targets --features ros-interop,jazzy -- -D warnings"
+    # Every test-gating feature must be listed or its file is never linted;
+    # hu-meter-tests / hu-monitor-tests gate the plugin suites (~2.3k lines).
+    run-cmd "cargo clippy -p hiroz-tests --all-targets --features ros-interop,hu-meter-tests,hu-monitor-tests,jazzy -- -D warnings"
 }
 
 def check-examples [] {
