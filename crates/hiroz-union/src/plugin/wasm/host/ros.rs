@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hiroz::dynamic::{
-    DynamicMessage, DynamicValue, FieldType, MessageSchema, get_schema,
+    DynamicMessage, DynamicValue, FieldType, MessageSchema,
     serialization::{deserialize_cdr, serialize_cdr},
 };
 use wasmtime::component::Resource;
@@ -16,24 +16,35 @@ use super::super::state::{PluginState, ServiceClientData, SubscriptionData};
 use super::hu;
 use hu::plugin::types::PluginError;
 
-impl hu::plugin::ros::Host for PluginState {
-    fn resolve_topic_ke(&mut self, topic: String) -> Result<String, PluginError> {
-        use hiroz_protocol::{EndpointKind, Entity, KeyExprFormatter, RmwZenohFormatter};
-        let domain_id = self.engine.domain_id;
-        let topic_stripped = topic.trim_start_matches('/').to_string();
-
-        let type_info = [EndpointKind::Publisher, EndpointKind::Subscription]
+impl PluginState {
+    /// The message type advertised by a live publisher or subscriber on `topic`,
+    /// if any. Used both to build the concrete publish key (`resolve_topic_ke`)
+    /// and to reject a disk-resolved type that conflicts with what the topic
+    /// actually carries (`encode_yaml_to_cdr`).
+    fn live_topic_type_info(&self, topic: &str) -> Option<hiroz_protocol::TypeInfo> {
+        use hiroz_protocol::{EndpointKind, Entity};
+        [EndpointKind::Publisher, EndpointKind::Subscription]
             .into_iter()
             .find_map(|kind| {
                 self.engine
                     .graph
-                    .get_entities_by_topic(kind, &topic)
+                    .get_entities_by_topic(kind, topic)
                     .first()
                     .and_then(|ent| match ent.as_ref() {
                         Entity::Endpoint(ep) => ep.type_info.clone(),
                         _ => None,
                     })
-            });
+            })
+    }
+}
+
+impl hu::plugin::ros::Host for PluginState {
+    fn resolve_topic_ke(&mut self, topic: String) -> Result<String, PluginError> {
+        use hiroz_protocol::{KeyExprFormatter, RmwZenohFormatter};
+        let domain_id = self.engine.domain_id;
+        let topic_stripped = topic.trim_start_matches('/').to_string();
+
+        let type_info = self.live_topic_type_info(&topic);
 
         Ok(match type_info {
             Some(ti) => {
@@ -141,19 +152,60 @@ impl hu::plugin::ros::Host for PluginState {
         Ok(Resource::new_own(rep))
     }
 
-    // NOTE: reads the global (structurally never-populated) SchemaRegistry
-    // rather than live discovery like HostServiceClient::call. This is a
-    // topic-pub path (`hu meter pub --msg-type/--yaml`), but the WIT signature
-    // is `(yaml, type-name)` with no topic to key a discovery query on. Fixing
-    // it properly needs a WIT change across all plugin copies — out of scope.
-    // Known, disclosed gap (see pr-readiness.md `pub_yaml_nested_twist`).
+    // Resolve the message schema for `type_name`, preferring `.msg` files on disk
+    // (via HIROZ_MSG_PATH) so publishing works even on a topic with no live node,
+    // like `ros2 topic pub`. When the type isn't on disk, fall back to live
+    // discovery from a node already on the topic (same approach as
+    // HostServiceClient::call). Either way, if the topic already carries a
+    // different wire type, that mismatch is reported rather than published with
+    // the wrong type.
     fn encode_yaml_to_cdr(
         &mut self,
+        topic: String,
         yaml: String,
         type_name: String,
     ) -> Result<Vec<u8>, PluginError> {
         self.require_perm(hu::plugin::types::Permission::PublishTopic)?;
-        let schema = get_schema(&type_name).ok_or(PluginError::NotFound)?;
+
+        let schema = match hiroz::dynamic::load_schema(&type_name) {
+            Some(schema) => {
+                // The publish key is built by `resolve_topic_ke` from a live
+                // endpoint's type. If the topic already carries a *different*
+                // type, encoding the requested type here would put incompatible
+                // bytes onto that endpoint's key — reject instead (same guard as
+                // the discovery branch below). An empty topic has no live type,
+                // so publishing to it still works, like `ros2 topic pub`.
+                if let Some(live) = self.live_topic_type_info(&topic)
+                    && live.name != type_name
+                {
+                    return Err(PluginError::Invalid(format!(
+                        "topic {topic} carries {}, not the requested {type_name}",
+                        live.name
+                    )));
+                }
+                schema
+            }
+            None => {
+                let node = self.engine.node.clone();
+                // Budget discovery independently; a slow/failed round-trip
+                // shouldn't look like a generic encode failure.
+                const DISCOVERY_TIMEOUT: Duration = Duration::from_millis(2000);
+                let discovered = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(
+                        node.discover_topic_schema_including_subscribers(&topic, DISCOVERY_TIMEOUT),
+                    )
+                })
+                .map_err(|_| PluginError::NotFound)?;
+                if discovered.schema.type_name != type_name {
+                    return Err(PluginError::Invalid(format!(
+                        "topic {topic} carries {}, not the requested {type_name}",
+                        discovered.schema.type_name
+                    )));
+                }
+                discovered.schema
+            }
+        };
+
         let value = parse_yaml_or_json(&yaml).map_err(PluginError::Invalid)?;
         let msg = json_to_dynamic_message(&value, &schema).map_err(PluginError::Invalid)?;
         serialize_cdr(&msg).map_err(|e| PluginError::Invalid(e.to_string()))

@@ -32,6 +32,13 @@ export HU_PLUGIN_PATH="${TARGET_DIR}/wasm32-wasip2/debug"
 # Tests spawn `hu` by name (Command::new("hu")) — put the built binary on PATH.
 export PATH="${TARGET_DIR}/debug:${PATH}"
 
+# NOTE: HIROZ_MSG_PATH is deliberately NOT set here. `hu meter pub` can resolve
+# a schema either from `.msg` files on disk (via HIROZ_MSG_PATH) or by live
+# discovery from a node on the topic. The disk path is covered by
+# `test_hu_meter_pub_empty_topic_from_disk`, which sets HIROZ_MSG_PATH itself on
+# the `hu` subprocess; leaving it unset for the rest of the suite keeps the
+# live-discovery fallback (`test_hu_meter_pub_publishes_to_live_topic`) honest.
+
 # Run single-threaded: each test spawns a router + hiroz node + `hu` subprocess
 # (JIT wasmtime), and two at once on the 2-core runner over-subscribe the cores
 # and starve graph discovery into a timeout. Wall-clock ≈ parallel here anyway.

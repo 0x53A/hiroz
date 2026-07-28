@@ -31,6 +31,8 @@
 | Extensible via plugins | no | yes (rqt plugins) | yes (`.wasm` plugins) |
 | Live multi-topic rate dashboard | — | rqt_topic | `hu` (interactive TUI) |
 
+**`hu meter pub` resolves the message schema from `.msg` files on disk**, so — like `ros2 topic pub` — it can publish to an empty topic with no node present. The plugin host reads the type from a `.msg` under `HIROZ_MSG_PATH` (colon-separated package or prefix directories, e.g. an ament `.../share`); if the type isn't on disk it falls back to discovering it from a live publisher or subscriber on the topic. Only when neither is available does it report a clear "could not resolve a message schema" error rather than guessing.
+
 ---
 
 ## Measurement accuracy: `hu meter hz` vs. `ros2 topic hz`

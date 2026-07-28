@@ -363,6 +363,14 @@ impl ZNode {
         T: ZMessage + WithTypeInfo,
     {
         debug!("[NOD] Creating subscriber: topic={}", topic);
+        // Register the schema with this node's type-description service (mirroring
+        // create_pub) so a typed subscriber is itself a valid schema source — a
+        // consumer that answers GetTypeDescription for its subscribed type, as
+        // ROS 2 nodes do. This is what lets `hu meter pub` resolve the schema
+        // from a topic that only has a subscriber.
+        if let Some(schema) = T::message_schema() {
+            self.register_schema_with_type_description_service(&schema);
+        }
         self.create_sub_impl(topic, Some(T::type_info()))
     }
 
@@ -1102,6 +1110,20 @@ impl ZNode {
     ) -> Result<DiscoveredTopicSchema> {
         SchemaDiscovery::new(self, discovery_timeout)
             .discover(topic)
+            .await
+            .map_err(|e| zenoh::Error::from(e.to_string()))
+    }
+
+    /// Like [`discover_topic_schema`](ZNode::discover_topic_schema), but resolves
+    /// the schema from a subscriber when no publisher is present. Used by
+    /// `hu meter pub`, whose target topic usually only has a consumer.
+    pub async fn discover_topic_schema_including_subscribers(
+        &self,
+        topic: &str,
+        discovery_timeout: Duration,
+    ) -> Result<DiscoveredTopicSchema> {
+        SchemaDiscovery::new(self, discovery_timeout)
+            .discover_including_subscribers(topic)
             .await
             .map_err(|e| zenoh::Error::from(e.to_string()))
     }
