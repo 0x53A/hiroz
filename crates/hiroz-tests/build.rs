@@ -1,6 +1,26 @@
 use std::{env, path::PathBuf};
 
 fn main() {
+    // Package-wide enforcement of the feature requirement.
+    //
+    // `tests/feature_gate.rs` only fires if Cargo selects that target.
+    // `cargo test -p hiroz-tests --test cache` with no features builds only
+    // `cache`, which the crate-level `cfg` compiles to an empty binary --
+    // `0 passed`, guard never run. A build script runs for every build of the
+    // package regardless of target selection, so this is the one place the
+    // requirement holds everywhere.
+    if std::env::var_os("CARGO_FEATURE_ROS_MSGS").is_none() {
+        panic!(
+            "\n\nhiroz-tests requires the `ros-msgs` feature.\n\n\
+             Without it the suites gated on it compile to empty test binaries \n\
+             that report `0 passed`, which reads as green but is no coverage.\n\n\
+             Build it as:\n\n    \
+             cargo test -p hiroz-tests --features ros-msgs,jazzy\n\n\
+             Suites that drive a real ROS 2 installation need \n    \
+             --features ros-interop,<distro> instead.\n"
+        );
+    }
+
     // Declare custom cfg for ROS version detection
     println!("cargo::rustc-check-cfg=cfg(ros_humble)");
 

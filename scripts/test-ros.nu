@@ -22,7 +22,11 @@ def clippy-rmw [] {
     }
 
     log-step "Clippy (rmw feature)"
-    run-cmd "cargo clippy --all-targets --workspace -F rmw -- -D warnings"
+    # `hiroz-tests` is linted separately with its features: under plain
+    # `--workspace` it is selected with none, so clippy would lint a set of
+    # empty files and report success.
+    run-cmd "cargo clippy --all-targets --workspace --exclude hiroz-tests -F rmw -- -D warnings"
+    run-cmd $"cargo clippy --all-targets -p hiroz-tests --features ros-interop,($distro) -- -D warnings"
 }
 
 def run-ros-interop [] {
