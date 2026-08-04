@@ -25,7 +25,7 @@
 | Log level get | `ros2 node get-logger-levels` (Jazzy+) | rqt_logger_level | `hu monitor log-level <node>` |
 | Log level set | `ros2 node set-logger-levels` (Jazzy+) | rqt_logger_level | `hu monitor log-level <node> <level>` |
 | **General** | | | |
-| Machine-readable output | — (human text only) | — | `--json` on every command |
+| Machine-readable output | — (human text only) | — | `--json` on most commands ([exceptions](#machine-readable-output)) |
 | Daemon-free operation | no (requires `_ros2_daemon`) | no | yes |
 | Works without a ROS 2 install | no | no | yes |
 | Extensible via plugins | no | yes (rqt plugins) | yes (`.wasm` plugins) |
@@ -101,7 +101,10 @@ When using the Fast-DDS Discovery Server (`FASTRTPS_DEFAULT_PROFILES_FILE` with 
 
 ## Machine-readable output
 
-Every `hu` command accepts `--json` and emits newline-delimited JSON. This makes it composable with `jq`, shell scripts, CI test harnesses, and logging pipelines without fragile text parsing.
+Most `hu` commands emit newline-delimited JSON with `--json`. This makes them composable with `jq`, shell scripts, CI test harnesses, and logging pipelines without fragile text parsing.
+
+!!! warning "`--json` is accepted everywhere but honoured selectively"
+    `--json` is a global flag, so the argument parser accepts it on *every* command — including ones where it has no effect. Those are `hu monitor watch`, `log` and `log-level` (only `graph` honours it), `hu meter echo`, `delay`, `param set`, `service find` and `service type`. Ignoring the flag does not always mean the output is unparseable: `hu monitor log` and `hu meter param set` already print one bare JSON object per line, because the plugin host hands plugins their messages and service responses pre-serialised as JSON. The rest are not JSON — `hu monitor watch` and `hu meter delay` print prose, `hu monitor log-level` prefixes its JSON with `log levels:`, `hu meter echo` prefixes each message with its topic (`[/chatter] {"data":"hello"}`), and `service find`/`service type` print bare unquoted values. Treat this as a non-exhaustive list and check a command's output before depending on it in a pipeline. For a machine-readable stream of graph change events, use [`hu stream --json`](hu.md#stream-mode) instead of `hu monitor watch --json`.
 
 `ros2cli` outputs human-formatted text with no stable machine-readable format. Parsing `ros2 topic list` output requires string splitting on `/` and filtering out blank lines; parsing `ros2 topic info` requires column-counting. Both break across ROS 2 versions.
 
@@ -116,8 +119,9 @@ hu meter info topic /scan --json | jq '.publishers[].node'
 rate=$(hu meter hz /camera/image_raw --duration 5 --json | jq '.rate_hz')
 [ "$(echo "$rate > 25" | bc)" = "1" ] || exit 1
 
-# Stream graph events to a log file
-hu monitor watch --json >> /var/log/ros-graph-events.jsonl
+# Stream graph events to a log file as newline-delimited JSON
+# (hu stream, not hu monitor watch — the latter ignores --json)
+hu stream --json >> /var/log/ros-graph-events.jsonl
 ```
 
 ---
@@ -126,7 +130,7 @@ hu monitor watch --json >> /var/log/ros-graph-events.jsonl
 
 `ros2cli` has no command that streams graph change events. To detect when a node appears or disappears you must poll `ros2 node list` in a loop, introducing latency proportional to your polling interval and burning CPU during quiet periods.
 
-`hu monitor watch` subscribes to Zenoh liveliness tokens, which are the mechanism hiroz and `rmw_zenoh_cpp` use to announce entity existence. It emits a JSON event the moment a node, topic, service, or action appears or disappears — with sub-millisecond latency after the transport propagates the change.
+`hu monitor watch` subscribes to Zenoh liveliness tokens, which are the mechanism hiroz and `rmw_zenoh_cpp` use to announce entity existence. It prints a line the moment a node, topic, service, or action appears or disappears — with sub-millisecond latency after the transport propagates the change.
 
 ```bash
 hu monitor watch

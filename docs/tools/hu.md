@@ -251,14 +251,17 @@ Measurement and introspection:
 | `hu meter echo <topic> --raw` | Hex-dump raw CDR bytes, bypassing schema decode (requires the `access-raw-cdr` permission) |
 | `hu meter delay <topic>` | End-to-end latency |
 | `hu meter pub <topic>` | Publish a message |
-| `hu meter list topics\|nodes\|services` | Enumerate graph entities |
-| `hu meter info topic\|node\|service <name>` | Full entity introspection |
-| `hu meter service call <name> --yaml <yaml> --msg-type <type> [--timeout <s>]` | Call a service |
-| `hu meter param list\|get\|dump\|describe\|set\|delete\|load <node> [...]` | Read/write/delete node parameters, or bulk-load from a ROS-style YAML params file (`load <node> <yaml-file>`). `load` is host-handled: `hu` reads and parses the YAML on the host (WASM plugins have no filesystem access) and hands the plugin pre-flattened parameter data. |
+| `hu meter list <kind> [--find <substr>] [--count <n>] [--all]` | Enumerate graph entities. `<kind>` is `topics` (the default when omitted), `nodes` or `services`. Hidden entities are excluded unless `--all` is given: for topics and services that means any name with a path segment starting with `_`, but for nodes only the bare node name is tested, so a node whose *namespace* has an `_`-prefixed segment stays visible. `--find` matches name or type for topics and services, name only for nodes; `--count` truncates the result. |
+| `hu meter list find-<kind> <substr>` | Shorthand for `list <kind> --find <substr>`, taking the filter as a positional argument: `find-topics`, `find-services`, `find-nodes`. |
+| `hu meter info <kind> <name>` | Full entity introspection; `<kind>` is `topic`, `node` or `service` |
+| `hu meter service list` | List services as `name<TAB>[type]` |
+| `hu meter service find <substr>` | List the names of services whose name contains `<substr>` |
+| `hu meter service type <name>` | Print a single service's type name, or exit 1 if it is not in the graph |
+| `hu meter service call <name> [--timeout <s>]` | Call a service. The request is given either as `--yaml <yaml> --msg-type <type>`, or as raw hex-encoded CDR bytes with `--payload <hex>` |
+| `hu meter param <verb> <node> [...]` | Read and write node parameters, or bulk-load them from a ROS-style YAML params file. `<verb>` is `list`, `get`, `dump`, `describe`, `set` or `load` (`load <node> <yaml-file>`). `load` is host-handled: `hu` reads and parses the YAML on the host (WASM plugins have no filesystem access) and hands the plugin pre-flattened parameter data. There is no `delete` verb — parameter deletion (`ros2 param delete`) is not implemented. |
 | `hu meter action list` | List available actions |
 | `hu meter action info <name>` | Show an action's type and server count |
-| `hu meter action send <name> <type> <goal-json> [--timeout <s>]` | Send a goal (JSON) and poll for the result |
-| `hu meter action send-goal <name> --payload <hex> [--timeout <s>]` | Send a goal from raw hex-encoded CDR bytes |
+| `hu meter action send-goal <name> --payload <hex> [--timeout <s>]` | Send a goal from raw hex-encoded CDR bytes, and poll for the result. This is the only way to send a goal — there is no JSON-goal verb; unlike `hu meter service call --yaml`, goals are not accepted in a human-authored form. |
 | `hu meter action echo <name> --msg-type <type> [--count <n>]` | Echo action feedback messages |
 
 ### hu monitor
@@ -330,22 +333,48 @@ hu meter info node /talker --json | jq '.publishers[].name'
 
 ## Stream mode
 
-`hu stream` streams graph change events to stdout without opening a TUI. Useful for piping into log aggregators, CI scripts, or dashboards that can't host a terminal:
+`hu stream` streams graph change events to stdout without opening a TUI. Useful for piping into log aggregators, CI scripts, or dashboards that can't host a terminal.
+
+It first prints the current graph as a snapshot, then one line per change event, each prefixed with a UTC timestamp. Type names appear in their DDS-mangled form (`std_msgs::msg::dds_::String_`), not the ROS `std_msgs/msg/String` form:
 
 ```bash
 hu stream
-# node appeared:  /camera_driver
-# topic appeared: /camera/image_raw
+# Discovered Topics:
+#   topic: /chatter (std_msgs::msg::dds_::String_)
+# Discovered Services:
+#   service: /talker/get_parameters (rcl_interfaces::srv::dds_::GetParameters_)
+# Discovered Nodes:
+#   node: //talker
+# [2026-08-04 07:42:06] Node discovered: /talker
+# [2026-08-04 07:42:06] Topic discovered: /chatter (std_msgs::msg::dds_::String_)
 ```
 
-Add `--json` for structured output:
+!!! note "The doubled slash in the snapshot's node lines"
+    Snapshot node lines are printed as `<namespace>/<name>`, and a node in the root namespace has the namespace `/` — so it renders as `//talker`, not `/talker`. The event lines below use the raw namespace instead and print `/talker`. `hu` itself joins the graph while streaming, so it appears alongside your nodes.
+
+Add `--json` for structured output. Every record is one of two shapes: an object with an `"event"` key naming it, or a `SystemEvent` in serde's externally-tagged form, where the variant name is the sole top-level key. The first line is always `"event":"initial_state"`; graph changes after it are the externally-tagged form. Adding `--echo` interleaves two further `"event"`-keyed shapes, `topic_subscribed` and `message_received`, so a filter must not assume every record after the first has a variant-name key:
 
 ```bash
 hu stream --json
-# {"type":"initial_state","nodes":[...],"topics":[...]}
-# {"type":"node_appeared","name":"/camera_driver"}
-# {"type":"topic_appeared","name":"/camera/image_raw","type_name":"sensor_msgs/msg/Image"}
+# {"event":"initial_state","timestamp":{"secs_since_epoch":1785829316,"nanos_since_epoch":522800352},"domain_id":0,"topics":[{"name":"/chatter","type":"std_msgs::msg::dds_::String_","publishers":1,"subscribers":0}],"nodes":[{"name":"talker","namespace":"/"}],"services":[{"name":"/talker/get_parameters","type":"rcl_interfaces::srv::dds_::GetParameters_"}]}
+# {"NodeDiscovered":{"namespace":"","name":"talker","timestamp":{"secs_since_epoch":1785829316,"nanos_since_epoch":522703282}}}
+# {"TopicDiscovered":{"topic":"/chatter","type_name":"std_msgs::msg::dds_::String_","timestamp":{"secs_since_epoch":1785829316,"nanos_since_epoch":522693292}}}
 ```
+
+The arrays are shown with one entry each for brevity; a real graph also carries `/parameter_events` and each node's parameter services.
+
+Because the variant name is the key rather than a `type` field, filtering with `jq` selects on key presence:
+
+```bash
+hu stream --json | jq -c 'select(has("TopicDiscovered")) | .TopicDiscovered.topic'
+```
+
+The event variants are `TopicDiscovered`, `TopicRemoved`, `RateMeasured`, `NodeDiscovered`, `NodeRemoved`, `ServiceDiscovered` and `MetricsSnapshot`.
+
+Two field-naming traps when writing filters:
+
+- The snapshot's per-topic and per-service type field is `type`; the event payloads use `type_name`.
+- A root-namespace node is reported as `"namespace":"/"` in the snapshot but `"namespace":""` in `NodeDiscovered`/`NodeRemoved` — the snapshot normalises the empty namespace, the events do not. Joining namespace and name naively will produce `//talker` from the snapshot.
 
 Add `--echo <TOPIC>` to also subscribe to a topic and interleave decoded messages. `--echo` can be repeated for multiple topics:
 
