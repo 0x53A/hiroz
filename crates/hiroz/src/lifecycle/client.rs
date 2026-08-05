@@ -173,6 +173,16 @@ fn state_from_lc(s: &LcState) -> LifecycleState {
         2 => LifecycleState::Inactive,
         3 => LifecycleState::Active,
         4 => LifecycleState::Finalized,
-        _ => LifecycleState::Unconfigured,
+        // Reported while a transition callback runs. Previously folded into
+        // `Unconfigured`, which reads as "the node reset itself".
+        10 => LifecycleState::Configuring,
+        11 => LifecycleState::CleaningUp,
+        12 => LifecycleState::ShuttingDown,
+        13 => LifecycleState::Activating,
+        14 => LifecycleState::Deactivating,
+        15 => LifecycleState::ErrorProcessing,
+        // id 0 and anything unrecognised: report it as unknown, not as a state
+        // the node never claimed.
+        _ => LifecycleState::Unknown,
     }
 }

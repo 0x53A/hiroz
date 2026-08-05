@@ -2,6 +2,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum State {
+    /// Decode-only: a remote node reported id 0. Never held by a live machine.
+    Unknown = 0,
     // Primary states
     Unconfigured = 1,
     Inactive = 2,
@@ -23,6 +25,7 @@ impl State {
 
     pub fn label(self) -> &'static str {
         match self {
+            State::Unknown => "unknown",
             State::Unconfigured => "unconfigured",
             State::Inactive => "inactive",
             State::Active => "active",
@@ -162,6 +165,26 @@ impl StateMachine {
     where
         F: FnOnce(State) -> CallbackReturn,
     {
+        match self.begin(transition) {
+            Some(start_state) => {
+                let cb_result = callback(start_state);
+                self.finish(transition, start_state, cb_result)
+            }
+            // Invalid transition: state unchanged
+            None => self.current,
+        }
+    }
+
+    /// First half of [`Self::trigger`]: validate and enter the intermediate
+    /// ("busy") state.
+    ///
+    /// Returns the start state for the user callback, or `None` if the
+    /// transition is illegal from the current state (nothing changed).
+    ///
+    /// Split from `trigger` so a caller can drop its lock before running the
+    /// callback and re-acquire it for [`Self::finish`] — a callback calling
+    /// `get_current_state` or `~/get_state` self-deadlocks otherwise.
+    pub fn begin(&mut self, transition: TransitionId) -> Option<State> {
         let start_state = self.current;
 
         // Validate transition is legal from the current primary state
@@ -177,17 +200,25 @@ impl StateMachine {
         );
 
         if !is_valid {
-            // Invalid transition: state unchanged
-            return self.current;
+            return None;
         }
 
-        // Enter the intermediate transition state
-        let transition_state = Self::intermediate_state(transition);
-        self.current = transition_state;
+        // Enter the intermediate transition state. This is what an observer
+        // (including the callback itself) sees while the callback runs.
+        self.current = Self::intermediate_state(transition);
 
-        // Invoke user callback
-        let cb_result = callback(start_state);
+        Some(start_state)
+    }
 
+    /// Second half of [`Self::trigger`]: apply the user callback's verdict.
+    ///
+    /// `start_state` must be the value returned by the matching [`Self::begin`].
+    pub fn finish(
+        &mut self,
+        transition: TransitionId,
+        start_state: State,
+        cb_result: CallbackReturn,
+    ) -> State {
         match cb_result {
             CallbackReturn::Success => {
                 // Happy path: move to goal state
@@ -202,7 +233,7 @@ impl StateMachine {
                 self.current = State::ErrorProcessing;
                 // Error processing returns to ErrorProcessing state — the
                 // on_error callback is invoked by the node, not here.
-                // The node calls trigger_error_processing() after this.
+                // The node calls finish_error_processing() after this.
             }
         }
 
@@ -217,6 +248,15 @@ impl StateMachine {
     {
         debug_assert_eq!(self.current, State::ErrorProcessing);
         let cb = on_error(State::ErrorProcessing);
+        self.finish_error_processing(cb)
+    }
+
+    /// Apply the `on_error` callback's verdict, without invoking it.
+    ///
+    /// The counterpart of [`Self::begin`]/[`Self::finish`] for the error path:
+    /// the caller runs `on_error` with no lock held and passes its result here.
+    pub fn finish_error_processing(&mut self, cb: CallbackReturn) -> State {
+        debug_assert_eq!(self.current, State::ErrorProcessing);
         self.current = match cb {
             CallbackReturn::Success => State::Unconfigured,
             // FAILURE or ERROR both lead to Finalized
