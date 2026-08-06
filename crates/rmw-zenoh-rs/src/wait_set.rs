@@ -388,15 +388,15 @@ pub extern "C" fn rmw_wait(
                     unsafe { *gc_array.guard_conditions.add(i) as *mut rmw_guard_condition_impl_t };
                 if !gc_impl_ptr.is_null() {
                     unsafe {
+                        // Shared, not exclusive: a delivery thread may be
+                        // inside `trigger` on this same object right now.
                         let gc_impl =
-                            &mut *(gc_impl_ptr as *mut crate::guard_condition::GuardConditionImpl);
-                        if !gc_impl.is_ready() {
-                            // Not ready - set to NULL in place
+                            &*(gc_impl_ptr as *const crate::guard_condition::GuardConditionImpl);
+                        // Check and consume in one atomic op. Reading then
+                        // resetting would drop a trigger landing between the
+                        // two: this wake is reported, the next one is lost.
+                        if !gc_impl.take_triggered() {
                             *gc_array.guard_conditions.add(i) = std::ptr::null_mut();
-                        } else {
-                            // Reset the guard condition after it's been detected as ready
-                            // This prevents it from staying triggered forever
-                            gc_impl.reset();
                         }
                     }
                 }

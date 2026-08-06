@@ -208,9 +208,11 @@ pub extern "C" fn rmw_create_publisher(
         qualified_topic.clone(),
         hiroz::event::ZenohEventType::PublicationMatched,
         move |change| {
-            if let Ok(mut mgr) = events_mgr.lock() {
-                mgr.update_event_status(hiroz::event::ZenohEventType::PublicationMatched, change);
-            }
+            hiroz::event::update_shared_event_status(
+                &events_mgr,
+                hiroz::event::ZenohEventType::PublicationMatched,
+                change,
+            );
             // Wake up wait sets
             notifier_clone_for_matched.notify_all();
         },
@@ -230,13 +232,12 @@ pub extern "C" fn rmw_create_publisher(
             // Decode policy_kind from upper 16 bits and change from lower 16 bits
             let policy_kind = ((encoded_change >> 16) & 0xFFFF) as u32;
             let change = encoded_change & 0xFFFF;
-            if let Ok(mut mgr) = events_mgr_clone.lock() {
-                mgr.update_event_status_with_policy(
-                    hiroz::event::ZenohEventType::OfferedQosIncompatible,
-                    change,
-                    policy_kind,
-                );
-            }
+            hiroz::event::update_shared_event_status_with_policy(
+                &events_mgr_clone,
+                hiroz::event::ZenohEventType::OfferedQosIncompatible,
+                change,
+                policy_kind,
+            );
             // Wake up wait sets
             notifier_clone_for_incompatible.notify_all();
         },
@@ -250,12 +251,11 @@ pub extern "C" fn rmw_create_publisher(
     // Check if there are already existing subscriptions for this topic and trigger the event
     let matching_sub_count = graph.count(hiroz::entity::EndpointKind::Subscription, &entity.topic);
     if matching_sub_count > 0 {
-        if let Ok(mut mgr) = zpub.events_mgr().lock() {
-            mgr.update_event_status(
-                hiroz::event::ZenohEventType::PublicationMatched,
-                matching_sub_count as i32,
-            );
-        }
+        hiroz::event::update_shared_event_status(
+            zpub.events_mgr(),
+            hiroz::event::ZenohEventType::PublicationMatched,
+            matching_sub_count as i32,
+        );
         notifier_clone_for_init.notify_all();
     }
 
@@ -307,13 +307,12 @@ pub extern "C" fn rmw_create_publisher(
         }
     }
     if incompatible_count > 0 {
-        if let Ok(mut mgr) = zpub.events_mgr().lock() {
-            mgr.update_event_status_with_policy(
-                hiroz::event::ZenohEventType::OfferedQosIncompatible,
-                incompatible_count,
-                last_policy_kind,
-            );
-        }
+        hiroz::event::update_shared_event_status_with_policy(
+            zpub.events_mgr(),
+            hiroz::event::ZenohEventType::OfferedQosIncompatible,
+            incompatible_count,
+            last_policy_kind,
+        );
         notifier_clone_for_init.notify_all();
     }
 
@@ -595,9 +594,11 @@ pub extern "C" fn rmw_create_subscription(
         sub_topic.clone(),
         hiroz::event::ZenohEventType::SubscriptionMatched,
         move |change| {
-            if let Ok(mut mgr) = events_mgr.lock() {
-                mgr.update_event_status(hiroz::event::ZenohEventType::SubscriptionMatched, change);
-            }
+            hiroz::event::update_shared_event_status(
+                &events_mgr,
+                hiroz::event::ZenohEventType::SubscriptionMatched,
+                change,
+            );
             // Wake up wait sets
             notifier_clone_for_matched.notify_all();
         },
@@ -617,13 +618,12 @@ pub extern "C" fn rmw_create_subscription(
             // Decode policy_kind from upper 16 bits and change from lower 16 bits
             let policy_kind = ((encoded_change >> 16) & 0xFFFF) as u32;
             let change = encoded_change & 0xFFFF;
-            if let Ok(mut mgr) = events_mgr_clone.lock() {
-                mgr.update_event_status_with_policy(
-                    hiroz::event::ZenohEventType::RequestedQosIncompatible,
-                    change,
-                    policy_kind,
-                );
-            }
+            hiroz::event::update_shared_event_status_with_policy(
+                &events_mgr_clone,
+                hiroz::event::ZenohEventType::RequestedQosIncompatible,
+                change,
+                policy_kind,
+            );
             // Wake up wait sets
             notifier_clone_for_incompatible.notify_all();
         },
@@ -637,12 +637,11 @@ pub extern "C" fn rmw_create_subscription(
     // Check if there are already existing publishers for this topic and trigger the event
     let matching_pub_count = graph.count(hiroz::entity::EndpointKind::Publisher, &entity.topic);
     if matching_pub_count > 0 {
-        if let Ok(mut mgr) = zsub.events_mgr().lock() {
-            mgr.update_event_status(
-                hiroz::event::ZenohEventType::SubscriptionMatched,
-                matching_pub_count as i32,
-            );
-        }
+        hiroz::event::update_shared_event_status(
+            zsub.events_mgr(),
+            hiroz::event::ZenohEventType::SubscriptionMatched,
+            matching_pub_count as i32,
+        );
         notifier_clone_for_init.notify_all();
     }
 
@@ -694,13 +693,12 @@ pub extern "C" fn rmw_create_subscription(
         }
     }
     if incompatible_count > 0 {
-        if let Ok(mut mgr) = zsub.events_mgr().lock() {
-            mgr.update_event_status_with_policy(
-                hiroz::event::ZenohEventType::RequestedQosIncompatible,
-                incompatible_count,
-                last_policy_kind,
-            );
-        }
+        hiroz::event::update_shared_event_status_with_policy(
+            zsub.events_mgr(),
+            hiroz::event::ZenohEventType::RequestedQosIncompatible,
+            incompatible_count,
+            last_policy_kind,
+        );
         notifier_clone_for_init.notify_all();
     }
 
@@ -2406,6 +2404,39 @@ pub extern "C" fn rmw_subscription_event_init(
     RMW_RET_OK as _
 }
 
+/// The `user_data` pointer rmw handed us, carried into the event callback.
+///
+/// The callback is `Fn(i32) + Send + Sync` and a raw pointer is neither, so
+/// capturing `user_data` directly does not compile. The previous `as usize`
+/// round-trip made it compile by silencing exactly the check that was flagging
+/// the hazard, and destroyed the pointer's provenance with it. This asserts the
+/// same thing explicitly, once.
+///
+/// The `unsafe impl`s below assert only that the pointer may be *moved* between
+/// threads. They say nothing about how long the pointee lives — see the known
+/// hazard on `update_shared_event_status_with_policy`.
+struct EventUserData(*mut c_void);
+
+impl EventUserData {
+    /// Hand the pointer back in the form the C callback expects.
+    ///
+    /// A method, not a field read: closures capture the most precise path they
+    /// use (RFC 2229), so `move |..| { ud.0 }` captures the bare pointer and
+    /// the newtype's `Send`/`Sync` never apply. `&self` forces whole-struct
+    /// capture.
+    fn as_ptr(&self) -> *const ::std::os::raw::c_void {
+        self.0 as *const ::std::os::raw::c_void
+    }
+}
+
+// SAFETY: the pointer is opaque to hiroz — it is never dereferenced here, only
+// handed back to the C callback that supplied it. rmw's contract is that the
+// callback may be invoked from any thread, so the caller has already accepted
+// that `user_data` is reachable from other threads.
+unsafe impl Send for EventUserData {}
+// SAFETY: as above. `&EventUserData` exposes no operation on the pointee.
+unsafe impl Sync for EventUserData {}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn rmw_event_set_callback(
     event: *mut rmw_event_t,
@@ -2421,11 +2452,13 @@ pub extern "C" fn rmw_event_set_callback(
     }
 
     let rm_event_handle = unsafe { &mut *((*event).data as *mut RmEventHandle) };
-    let user_data_ptr = user_data as usize;
+    let user_data = EventUserData(user_data);
     rm_event_handle.set_callback(move |change: i32| {
         if let Some(cb) = callback {
-            let ud = user_data_ptr as *mut ::std::os::raw::c_void;
-            unsafe { cb(ud as *const ::std::os::raw::c_void, change as usize) };
+            // SAFETY: `cb` and the pointer were supplied together by rmw and
+            // this is the pair's only use. Pointee validity is NOT established
+            // here — a concurrent detach can free it first. See hiroz#287.
+            unsafe { cb(user_data.as_ptr(), change as usize) };
         }
     });
 
