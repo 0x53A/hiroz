@@ -70,6 +70,7 @@ impl TestRouter {
 
 fn create_context_with_router(router: &TestRouter) -> hiroz::Result<hiroz::context::ZContext> {
     ZContextBuilder::default()
+        .with_mode("client")
         .disable_multicast_scouting()
         .with_connect_endpoints([router.endpoint()])
         .build()
