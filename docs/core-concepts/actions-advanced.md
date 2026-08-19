@@ -96,7 +96,7 @@ pub async fn run_fibonacci_action_server(ctx: ZContext, timeout: Option<Duration
 
 ```bash
 # Start Eclipse Zenoh router first
-cargo run --example zenoh_router
+hu router
 
 # Run the server (runs until Ctrl+C)
 cargo run --example demo_nodes_fibonacci_action_server
@@ -200,7 +200,7 @@ cargo run --example demo_nodes_fibonacci_action_client -- --endpoint tcp/localho
 **Terminal 1 - Start Zenoh Router:**
 
 ```bash
-cargo run --example zenoh_router
+hu router
 ```
 
 **Terminal 2 - Start Action Server:**
@@ -351,7 +351,7 @@ impl ZAction for CountAction {
 
 ## Resources
 
-- **[ROS 2 Actions Documentation](https://docs.ros.org/en/rolling/Tutorials/Intermediate/Writing-an-Action-Server-Client/Py.html)** - Official ROS 2 action guide
+- **[ROS 2 Actions Documentation](https://docs.ros.org/en/jazzy/Tutorials/Intermediate/Writing-an-Action-Server-Client/Py.html)** - Official ROS 2 action guide
 - **[hiroz Examples](https://github.com/ZettaScaleLabs/hiroz/tree/main/crates/hiroz/examples)** - Working action implementations
 - **[Services](./services.md)** - Simpler request-response pattern
 - **[Custom Messages](../user-guide/custom-messages.md)** - Defining custom action types with `.action` files

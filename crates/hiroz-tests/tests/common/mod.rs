@@ -1,4 +1,6 @@
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +25,111 @@ impl ProcessGuard {
             child: Some(child),
             name: name.to_string(),
         }
+    }
+}
+
+/// Concurrently drains a child's piped `stdout` and `stderr` so they can be
+/// reported when the child fails.
+///
+/// A test that spawns an external process and discards its diagnostics can only
+/// report *that* the process failed, never why. `ros2 run` writes its reason to
+/// stderr, so a test which asserts on an exit status must capture both streams
+/// and surface them in the failure message.
+///
+/// **Draining concurrently is what makes piping safe.** A pipe nobody reads
+/// fills, and the child then blocks writing to it — which would convert a fast
+/// failure into whatever timeout the caller's wait loop uses. One reader thread
+/// per stream removes that coupling: they run until EOF, which arrives when the
+/// child exits.
+pub struct OutputCapture {
+    stdout: Arc<std::sync::Mutex<String>>,
+    stderr: Arc<std::sync::Mutex<String>>,
+    readers: Vec<thread::JoinHandle<()>>,
+}
+
+#[allow(dead_code)]
+impl OutputCapture {
+    /// Takes the child's piped handles and starts draining them immediately.
+    ///
+    /// Call directly after `spawn`, before any wait loop. A stream that was not
+    /// piped contributes nothing.
+    pub fn start(child: &mut Child) -> Self {
+        use std::io::{BufRead, BufReader, Read};
+
+        fn drain<R: Read + Send + 'static>(
+            stream: Option<R>,
+            sink: Arc<std::sync::Mutex<String>>,
+        ) -> Option<thread::JoinHandle<()>> {
+            let stream = stream?;
+            Some(thread::spawn(move || {
+                // Append line by line rather than reading to EOF in one call, so
+                // [`OutputCapture::snapshot`] can observe a still-running child.
+                // A process that never exits on its own — a subscriber, say —
+                // would otherwise yield nothing until it was killed.
+                //
+                // A read error is not worth failing over: the caller is already
+                // reporting a failure and this is supplementary detail.
+                for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                    if let Ok(mut sink) = sink.lock() {
+                        sink.push_str(&line);
+                        sink.push('\n');
+                    }
+                }
+            }))
+        }
+
+        let stdout = Arc::new(std::sync::Mutex::new(String::new()));
+        let stderr = Arc::new(std::sync::Mutex::new(String::new()));
+        let readers = [
+            drain(child.stdout.take(), stdout.clone()),
+            drain(child.stderr.take(), stderr.clone()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        Self {
+            stdout,
+            stderr,
+            readers,
+        }
+    }
+
+    /// Everything captured so far on **both** streams, without waiting for the
+    /// child.
+    ///
+    /// For a process that does not exit on its own — a subscriber that runs
+    /// until it is signalled — this is the only way to assert on what it
+    /// printed. [`Self::finish`] would block until the reader threads see EOF.
+    ///
+    /// Both streams are included because **ROS 2 logging goes to stderr by
+    /// default**: an `RCLCPP_INFO` line such as the listener's `I heard` is not
+    /// on stdout unless `RCUTILS_LOGGING_USE_STDOUT` is set. Asserting on stdout
+    /// alone silently observes an empty buffer and reads as "the node received
+    /// nothing".
+    pub fn snapshot(&self) -> String {
+        let out = self.stdout.lock().map(|s| s.clone()).unwrap_or_default();
+        let err = self.stderr.lock().map(|s| s.clone()).unwrap_or_default();
+        format!("{out}{err}")
+    }
+
+    /// Joins the reader threads and renders both streams as a printable block.
+    ///
+    /// Call only once the child has exited, so the readers have reached EOF.
+    pub fn finish(self) -> String {
+        for reader in self.readers {
+            let _ = reader.join();
+        }
+        let mut block = String::new();
+        for (label, sink) in [("stdout", &self.stdout), ("stderr", &self.stderr)] {
+            let text = sink.lock().map(|s| s.clone()).unwrap_or_default();
+            if text.trim().is_empty() {
+                block.push_str(&format!("--- child {label}: <empty> ---\n"));
+            } else {
+                block.push_str(&format!("--- child {label} ---\n{}\n", text.trim_end()));
+            }
+        }
+        block
     }
 }
 
@@ -131,7 +238,26 @@ impl TestRouter {
 
             match zenoh::open(config).wait() {
                 Ok(session) => {
-                    thread::sleep(Duration::from_millis(500));
+                    // Poll the router's TCP listener (40 * 50ms, ~2s budget)
+                    // instead of a blind fixed sleep; proceed anyway if it
+                    // never accepts (best-effort).
+                    let probe_addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                    for _ in 0..40 {
+                        // connect_timeout caps each probe at 50ms; plain connect
+                        // could block on the OS timeout and blow the budget.
+                        if std::net::TcpStream::connect_timeout(
+                            &probe_addr,
+                            Duration::from_millis(50),
+                        )
+                        .is_ok()
+                        {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    // TCP-accept only proves the listener is bound; short floor
+                    // covers the router's remaining routing/liveliness init.
+                    thread::sleep(Duration::from_millis(150));
                     println!("Zenoh router ready on {}", endpoint);
                     return Self {
                         port,
@@ -189,6 +315,34 @@ pub fn create_hiroz_context_with_endpoint(
 #[allow(dead_code)]
 pub fn wait_for_ready(duration: Duration) {
     thread::sleep(duration);
+}
+
+/// Wait until a ROS node named `node_name` is visible in the graph, or `timeout`
+/// elapses. Deterministic replacement for a blind `wait_for_ready` sleep before
+/// interacting with a just-spawned node: it returns as soon as the node is
+/// discoverable (proceeds early on the fast path) instead of always sleeping a
+/// fixed time. Returns whether the node appeared — callers may proceed either
+/// way, since the following operation carries its own discovery timeout.
+#[allow(dead_code)]
+pub fn wait_for_ros_node(node_name: &str, router: &TestRouter, timeout: Duration) -> bool {
+    let ctx = create_hiroz_context_with_router(router).expect("Failed to create probe context");
+    let start = std::time::Instant::now();
+    loop {
+        if ctx
+            .graph()
+            .get_node_names()
+            .iter()
+            .any(|(name, _ns)| name == node_name)
+        {
+            println!("Node '{node_name}' discovered after {:?}", start.elapsed());
+            return true;
+        }
+        if start.elapsed() >= timeout {
+            eprintln!("Node '{node_name}' not visible after {timeout:?}; proceeding");
+            return false;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Deterministically wait for a service to be ready by polling with test requests
@@ -397,4 +551,86 @@ pub fn spawn_python_service_client(
         .expect("Failed to spawn Python service client");
 
     ProcessGuard::new(child, "python_service_client")
+}
+
+/// Holds a background producer (Zenoh entities) alive until this guard drops.
+/// Drop signals a stop flag and detaches the thread (no join, so a producer
+/// blocked in recv can't hang teardown) — so teardown is best-effort, not
+/// synchronous: the entities may briefly outlive the drop. Preferred over a
+/// fixed-duration sleep: too short and the entity vanishes before `hu` reads it;
+/// too long and the producer's client session reconnect-spins after `TestRouter`
+/// drops, stealing CPU from later serial tests.
+#[allow(dead_code)]
+#[must_use = "binding must be kept alive (e.g. `let _producer = ...`); dropping it immediately tears the producer down"]
+pub struct ProducerGuard {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for ProducerGuard {
+    fn drop(&mut self) {
+        // Signal stop, then detach: dropping a Zenoh session can block (async
+        // close during Tokio teardown), so joining here risks hanging the test
+        // thread. Detaching still stops the producer's active work immediately.
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            // Normally still running until we set `stop`. If already finished,
+            // the producer exited early (usually a panic) — surface it: join()
+            // on a finished thread returns immediately, and the panic would
+            // otherwise be swallowed and misdiagnosed as "entity never appeared".
+            if handle.is_finished()
+                && let Err(panic) = handle.join()
+            {
+                let msg = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "<non-string panic payload>".to_string());
+                eprintln!(
+                    "WARNING: test producer thread exited early (before teardown) \
+                     with a panic: {msg}. Downstream 'entity not discovered' \
+                     failures in this test are likely caused by this."
+                );
+            }
+            // Otherwise detach: the still-running thread's session teardown can
+            // block, and must not block the test thread.
+        }
+    }
+}
+
+/// Spawn a producer running `body` on a fresh Tokio runtime. `body` must poll
+/// the stop flag to hold entities alive (e.g.
+/// `while !stop.load(Ordering::Relaxed) { tokio::time::sleep(..).await }`) and
+/// exits, dropping them, when the returned guard drops. `body` is async, so
+/// tasks it spawns (e.g. an action-server handler) keep running while it holds.
+#[allow(dead_code)]
+pub fn spawn_producer<Fut>(
+    body: impl FnOnce(Arc<AtomicBool>) -> Fut + Send + 'static,
+) -> ProducerGuard
+where
+    Fut: std::future::Future<Output = ()>,
+{
+    let stop = Arc::new(AtomicBool::new(false));
+    let s = stop.clone();
+    let handle = thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(body(s));
+    });
+    ProducerGuard {
+        stop,
+        handle: Some(handle),
+    }
+}
+
+/// Convenience for a passive producer: build entities up front, then hold them
+/// alive until the guard drops. `build` runs inside the Tokio runtime.
+#[allow(dead_code)]
+pub fn spawn_holder<T: Send + 'static>(
+    build: impl FnOnce() -> T + Send + 'static,
+) -> ProducerGuard {
+    spawn_producer(|stop| async move {
+        let _held = build();
+        while !stop.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
 }

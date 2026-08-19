@@ -28,6 +28,7 @@ use crate::{
     msg::{SerdeCdrSerdes, ZDeserializer, ZSerializer},
     pubsub::{ZPub, ZPubBuilder},
     qos::{QosDurability, QosHistory, QosProfile, QosReliability},
+    reentrancy::TrackedRwLock,
     service::ZServerBuilder,
 };
 
@@ -45,11 +46,16 @@ pub(crate) struct ParameterServiceConfig<'a> {
     pub counter: &'a GlobalCounter,
     pub clock: &'a crate::time::ZClock,
     pub overrides: HashMap<String, ParameterValue>,
+    /// This node's type description service, if enabled. When present, the six
+    /// built-in parameter services' Request/Response schemas are registered
+    /// with it so `ZNode::discover_service_schema` can resolve them (see
+    /// `wire_types::register_parameter_schemas`).
+    pub type_desc_service: Option<&'a crate::dynamic::TypeDescriptionService>,
 }
 
 struct ParameterState {
     store: RwLock<ParameterStore>,
-    on_set_callback: RwLock<Option<SetCallback>>,
+    on_set_callback: TrackedRwLock<Option<SetCallback>>,
     event_publisher: ZPub<WireParameterEvent, SerdeCdrSerdes<WireParameterEvent>>,
     node_fqn: String,
 }
@@ -183,13 +189,31 @@ impl ParameterState {
             }
         }
 
-        if let Ok(cb_guard) = self.on_set_callback.read()
-            && let Some(cb) = cb_guard.as_ref()
-        {
+        // Clone the `Arc` out and drop the guard before invoking. Holding
+        // `on_set_callback.read()` across the call breaks two paths reachable
+        // from the public API:
+        //
+        // * `on_set_parameters` from inside the callback wants `write()` on a
+        //   thread already holding the read guard — deadlock, no race needed;
+        // * `set_parameter` re-enters `validate_and_apply` and takes `read()`
+        //   recursively, which `std::sync::RwLock` does not guarantee — it
+        //   deadlocks if a writer queues between the two.
+        //
+        // `SetCallback` is already an `Arc`, so this costs one refcount bump.
+        let callback: Option<SetCallback> = self
+            .on_set_callback
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned());
+
+        if let Some(cb) = callback.as_ref() {
             if atomic {
                 // Atomic: call callback once with all params; on rejection fail all.
                 if results.iter().all(|r| r.successful) {
-                    let cb_result = cb(params);
+                    let cb_result = crate::invoke_user_callback!(
+                        "ParameterState::validate_and_apply (atomic)",
+                        cb(params)
+                    );
                     if !cb_result.successful {
                         return params
                             .iter()
@@ -201,7 +225,10 @@ impl ParameterState {
                 // Non-atomic (ROS 2 spec): call callback once per parameter independently.
                 for (i, param) in params.iter().enumerate() {
                     if results[i].successful {
-                        let cb_result = cb(std::slice::from_ref(param));
+                        let cb_result = crate::invoke_user_callback!(
+                            "ParameterState::validate_and_apply (per-parameter)",
+                            cb(std::slice::from_ref(param))
+                        );
                         if !cb_result.successful {
                             results[i] = SetParametersResult::failure(cb_result.reason);
                         }
@@ -263,7 +290,12 @@ impl ParameterService {
             counter,
             clock,
             overrides,
+            type_desc_service,
         } = config;
+
+        if let Some(tds) = type_desc_service {
+            wire_types::register_parameter_schemas(tds);
+        }
         let node_entity = NodeEntity::new(
             0,
             session.zid(),
@@ -332,7 +364,7 @@ impl ParameterService {
             } else {
                 ParameterStore::with_overrides(overrides)
             }),
-            on_set_callback: RwLock::new(None),
+            on_set_callback: TrackedRwLock::new(None),
             event_publisher: pub_builder.build()?,
             node_fqn,
         });

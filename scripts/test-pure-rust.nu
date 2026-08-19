@@ -19,7 +19,21 @@ def run-tests [] {
     $env.RUSTFLAGS = "-D warnings"
 
     log-step "Run tests"
-    run-cmd "cargo nextest run --no-fail-fast"
+    # Three exclusions, each run or covered elsewhere:
+    #
+    # - `hiroz-tests`: run separately below with `ros-msgs,jazzy`. Its gated
+    #   suites are `#![cfg(feature = "ros-msgs")]` and compile to empty binaries
+    #   reporting `0 passed` without them. No ROS install needed -- hiroz-msgs
+    #   bundles the definitions.
+    # - `rmw-zenoh-rs`: its build script generates bindings from ROS C headers,
+    #   which this job does not have. The ROS jobs lint it via `-F rmw`.
+    # - `shm_size_estimation`: needs a `/dev/shm` segment sized for a
+    #   PointCloud2; a runner cannot allocate it and `zenoh-shm` fails with
+    #   ENOMEM before any hiroz code runs. Covered by the `test-shm` step.
+    #
+    # None were in `default-members`, so none ran here before `--workspace`.
+    run-cmd "cargo nextest run --no-fail-fast --workspace --exclude hiroz-tests --exclude rmw-zenoh-rs -E 'not binary(shm_size_estimation)'"
+    run-cmd "cargo nextest run --no-fail-fast -p hiroz-tests --features ros-msgs,jazzy"
 }
 
 def check-bundled-msgs [] {
@@ -34,15 +48,83 @@ def check-bundled-msgs [] {
     run-cmd "cargo check -p hiroz-msgs --no-default-features --features nav_msgs"
 }
 
-def check-console [] {
-    log-step "Check hiroz-console"
-    run-cmd "cargo check -p hiroz-console"
-    run-cmd "cargo clippy -p hiroz-console -- -D warnings"
+def check-hu [] {
+    log-step "Check hiroz-union"
+    run-cmd "cargo check -p hiroz-union"
+    run-cmd "cargo clippy -p hiroz-union -- -D warnings"
+    log-step "Build WASM plugins (wasm32-wasip2)"
+    # Needs the wasm32-wasip2 sysroot: CI uses `.#pureRust-ci`; locally enter
+    # `.#pureRust-wasm` (the default `.#pureRust` shell omits it to stay lean).
+    run-cmd "cargo build --manifest-path crates/hiroz-union/plugins/Cargo.toml --target wasm32-wasip2 --workspace"
+    # Standalone build to mirror a third-party plugin author's setup.
+    run-cmd "cargo build --manifest-path crates/hiroz-union/plugins/hu-plugin-template/Cargo.toml --target wasm32-wasip2"
 }
 
 def clippy-hiroz-py [] {
     log-step "Clippy (hiroz-py)"
     run-cmd "cargo clippy -p hiroz-py --all-targets -- -D warnings"
+}
+
+def clippy-tests [] {
+    log-step "Clippy (hiroz-tests, interop features)"
+    # Every test-gating feature must be listed or its file is never linted;
+    # hu-meter-tests / hu-monitor-tests gate the plugin suites (~2.3k lines).
+    run-cmd "cargo clippy -p hiroz-tests --all-targets --features ros-interop,hu-meter-tests,hu-monitor-tests,jazzy -- -D warnings"
+}
+
+def check-rustdoc-links [] {
+    log-step "Rustdoc links (cargo doc)"
+    # `cargo doc` reports unresolved intra-doc links as *warnings* and still
+    # exits 0, so the exit code proves nothing -- the diagnostics have to be
+    # matched. Both spellings are checked because rustdoc emits the prose form
+    # ("unresolved link to `X`") and, depending on invocation, the lint name.
+    let r = (^cargo doc --no-deps -p hiroz --quiet | complete)
+    let w = ($r.stderr | lines | where {|it| ($it =~ 'unresolved link') or ($it =~ 'broken_intra_doc_links')})
+    if ($w | is-not-empty) {
+        print ($w | str join (char newline))
+        error make {msg: 'rustdoc: unresolved intra-doc links'}
+    }
+}
+
+def check-python-stubs [] {
+    log-step "Generated Python stubs are up to date"
+    # The stubs under crates/hiroz-msgs/python/hiroz_msgs_py/types/ are
+    # generated from the .msg/.srv assets and committed. Nothing used to check
+    # that the committed copy still matched the generator, so an asset change
+    # without a rebuild-and-commit went unnoticed -- which is how six
+    # rcl_interfaces classes fell out of the checked-in copy.
+    #
+    # `touch build.rs` forces the generator to run even when cargo considers
+    # the crate up to date; without it a warm target dir makes this a no-op
+    # that passes without generating anything.
+    #
+    # The directory is emptied first so that *deletions* are caught too. The
+    # generator only writes files for packages it currently emits -- it never
+    # removes one -- so dropping a package's assets would otherwise leave its
+    # orphaned stub tracked and unchanged, and the check would pass. Emptying
+    # turns that into a visible ` D` entry. Verified safe: a build from an
+    # empty directory reproduces exactly the committed set (13 of 13), so this
+    # cannot ask for a legitimately-committed stub to be deleted.
+    #
+    # If the build below fails, the stubs are left deleted in the working
+    # tree; `git checkout -- <stub_dir>` restores them.
+    let stub_dir = "crates/hiroz-msgs/python/hiroz_msgs_py/types"
+    rm -f ...(glob $"($stub_dir)/*.py")
+    touch crates/hiroz-msgs/build.rs
+    run-cmd "cargo build -j4 -p hiroz-msgs --features python_registry"
+
+    # `git status --porcelain`, not `git diff`: diff reports only tracked
+    # files, so a stub for a newly-added package would be generated, left
+    # untracked, and silently pass.
+    let drift = (^git status --porcelain -- $stub_dir | complete)
+    if ($drift.stdout | str trim | is-not-empty) {
+        print ($drift.stdout | str trim)
+        print (^git diff -- $stub_dir | complete | get stdout)
+        error make {
+            msg: $"generated Python stubs are stale -- run `cargo build -p hiroz-msgs --features python_registry` and commit ($stub_dir)"
+        }
+    }
+    print $"Generated Python stubs match the message assets."
 }
 
 def check-examples [] {
@@ -67,7 +149,9 @@ def test-shm [] {
     # Integration-style unit tests (pub/sub with SHM)
     run-cmd "cargo test --package hiroz --test shm"
     # Integration tests (validate shm_pointcloud2 example)
-    run-cmd "cargo test --package hiroz-tests --test shm_example"
+    # `hiroz-tests` has no featureless configuration (enforced by its build
+    # script), so name the features even though shm_example itself is ungated.
+    run-cmd "cargo test --package hiroz-tests --test shm_example --features ros-msgs,jazzy"
 }
 
 # ============================================================================
@@ -79,10 +163,13 @@ def get-test-map [] {
         clippy-workspace: { clippy-workspace }
         run-tests: { run-tests }
         check-bundled-msgs: { check-bundled-msgs }
-        check-console: { check-console }
+        check-hu: { check-hu }
         check-examples: { check-examples }
+        check-rustdoc-links: { check-rustdoc-links }
+        check-python-stubs: { check-python-stubs }
         check-distro-features: { check-distro-features }
         clippy-hiroz-py: { clippy-hiroz-py }
+        clippy-tests: { clippy-tests }
         test-shm: { test-shm }
     }
 }
@@ -92,10 +179,13 @@ def get-test-pipeline [] {
         "clippy-workspace"
         "run-tests"
         "check-bundled-msgs"
-        "check-console"
+        "check-hu"
         "check-examples"
+        "check-rustdoc-links"
+        "check-python-stubs"
         "check-distro-features"
         "clippy-hiroz-py"
+        "clippy-tests"
         "test-shm"
     ]
 }

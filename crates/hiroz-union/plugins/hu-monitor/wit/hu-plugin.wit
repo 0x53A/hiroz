@@ -1,0 +1,319 @@
+// hu plugin interface v0.1
+//
+// VENDORED COPY — do not edit in isolation. The canonical source is
+// crates/hiroz-union/wit/v0.1/hu-plugin.wit; this file is kept in sync with it
+// (this header aside) so hu-monitor compiles as a standalone crate. Keep the
+// two in sync: any change to the canonical WIT must be mirrored here (and vice
+// versa).
+//
+// Host-proxied model: the host (hu) owns Zenoh sessions. The ros interface
+// proxies one shared session (JSON-decoded for dynamic messages; typed records
+// for measurements). The session interface provides named multi-session handles
+// with raw CDR passthrough for bridge plugins.
+//
+// Three worlds:
+//   hu-cli-plugin  — one-shot / streaming CLI tools (hz, bw, echo, bridge)
+//   hu-tui-plugin  — tick-driven TUI panes with keybindings and topic navigation
+//   hu-web-plugin  — HTTP request/response handlers for the web UI server
+
+package hu:plugin@0.1.0;
+
+interface types {
+    record keybinding {
+        key: string,
+        description: string,
+        command: string,
+    }
+
+    enum session-mode {
+        client,
+        peer,
+    }
+
+    record session-requirement {
+        name: string,
+        endpoint: string,
+        mode: session-mode,
+    }
+
+    // Capabilities a plugin lists in `plugin-manifest.required-permissions`.
+    //
+    // These are SELF-DECLARED by the (untrusted) plugin: host calls are gated
+    // against this list, but there is no external user consent yet, so a
+    // malicious plugin can simply declare all of them. This is a
+    // "declare-what-you-use" contract, not an enforced trust boundary — the
+    // user-facing trust gate lands in a later release. Until then, only run
+    // plugins you trust.
+    //
+    // `access-raw-cdr` is a broad grant: it permits raw pub/sub/query/liveliness
+    // on ANY key expression (including internal graph tokens), so it supersedes
+    // the narrower topic/service permissions.
+    enum permission {
+        subscribe-topic,
+        publish-topic,
+        call-service,
+        measure-metrics,
+        access-raw-cdr,
+        open-session,
+    }
+
+    // Error returned by fallible host calls. Plugins can branch on the kind
+    // (e.g. treat `timeout` as "service unavailable") instead of sniffing a
+    // message string. `invalid`/`transport` carry a human-readable detail.
+    variant plugin-error {
+        // The operation did not complete before its deadline (e.g. a service
+        // call with no reply, or no matching server).
+        timeout,
+        // The requested topic/service/schema is not known to the host.
+        not-found,
+        // The plugin did not declare the permission this call requires.
+        denied,
+        // The request was malformed (bad key expression, YAML/JSON, etc.).
+        invalid(string),
+        // The underlying Zenoh transport failed.
+        transport(string),
+    }
+
+    enum event-kind {
+        startup,
+        tick,
+        key-action,
+        topic-selected,
+        interrupt,
+    }
+
+    // Events delivered to CLI plugins. No TUI-specific variants.
+    variant cli-event {
+        startup(list<string>),
+        tick,
+        interrupt,
+    }
+
+    // Events delivered to TUI plugins. Superset of cli-event.
+    variant tui-event {
+        startup(list<string>),
+        key-action(string),
+        topic-selected(string),
+        tick,
+        interrupt,
+    }
+
+    record plugin-manifest {
+        name: string,
+        version: string,
+        description: string,
+        bindings: list<keybinding>,
+        tick-ms: u32,
+        sessions: list<session-requirement>,
+        // Empty = receive all events (backward compat).
+        subscribed-events: list<event-kind>,
+        required-permissions: list<permission>,
+    }
+}
+
+interface graph {
+    record topic-info {
+        name: string,
+        type-name: string,
+        publishers: u32,
+        subscribers: u32,
+    }
+    record node-info {
+        namespace: string,
+        name: string,
+    }
+    record service-info {
+        name: string,
+        type-name: string,
+        servers: u32,
+    }
+
+    // Per-node endpoint detail — used by `describe-node` to answer "what does
+    // this node publish/subscribe to".
+    record node-endpoint {
+        name: string,
+        type-name: string,
+    }
+    record node-detail {
+        publishers: list<node-endpoint>,
+        subscribers: list<node-endpoint>,
+    }
+
+    list-topics:   func() -> list<topic-info>;
+    list-nodes:    func() -> list<node-info>;
+    list-services: func() -> list<service-info>;
+    // Looks up a single node by (namespace, name) and returns its publisher /
+    // subscriber topics, or `none` when no such node exists in the graph.
+    describe-node: func(namespace: string, name: string) -> option<node-detail>;
+}
+
+interface ros {
+    use types.{plugin-error};
+
+    resource subscription {
+        try-recv: func() -> option<string>;
+    }
+
+    resource service-client {
+        // `request` accepts either a JSON object or flow-YAML request body;
+        // the host (parse_yaml_or_json) parses whichever form is given.
+        call: func(request: string, timeout-ms: u32) -> result<string, plugin-error>;
+        // Raw CDR passthrough — bypasses schema-based JSON encode/decode.
+        // Used for callers that already have an exact CDR payload (e.g. hex
+        // bytes from a CLI --payload flag) rather than a JSON request body.
+        call-raw: func(payload: list<u8>, timeout-ms: u32) -> result<list<u8>, plugin-error>;
+    }
+
+    // Typed measurement records — avoid JSON round-trip for the common analytics path.
+    record hz-measurement {
+        topic: string,
+        rate-hz: f64,
+        sample-count: u32,
+    }
+
+    record bw-measurement {
+        topic: string,
+        rate-kbps: f64,
+        sample-count: u32,
+    }
+
+    subscribe: func(topic: string) -> result<subscription, plugin-error>;
+    // Resolve a ROS topic name to its full RmwZenoh key expression (domain
+    // + mangled type + hash), for use with session.raw-subscribe/raw-publisher
+    // when raw CDR bytes are needed instead of the decoded-JSON subscribe
+    // path. Falls back to a wildcard-type key expression if no publisher/
+    // subscriber for the topic has been discovered yet.
+    resolve-topic-ke: func(topic: string) -> result<string, plugin-error>;
+    connect-service: func(name: string, type-name: string) -> result<service-client, plugin-error>;
+
+    measure-hz: func(topic: string, window-ms: u32) -> result<hz-measurement, plugin-error>;
+    measure-bw: func(topic: string, window-ms: u32) -> result<bw-measurement, plugin-error>;
+
+    // Encode a YAML/JSON body to CDR for `topic`. The schema is resolved from a
+    // `.msg` on HIROZ_MSG_PATH, or, failing that, by live discovery from a node
+    // already on the topic — so publishing to an empty topic works, like
+    // `ros2 topic pub`. `type-name` is the caller's intended type; if the topic
+    // already carries a different wire type, that is an error.
+    encode-yaml-to-cdr: func(topic: string, yaml: string, type-name: string) -> result<list<u8>, plugin-error>;
+}
+
+interface raw-transport {
+    use types.{plugin-error};
+
+    resource raw-subscription {
+        try-recv: func() -> option<list<u8>>;
+    }
+
+    resource raw-publisher {
+        publish: func(payload: list<u8>) -> result<_, plugin-error>;
+    }
+
+    // Opaque keep-alive handle: the declared liveliness token stays asserted for
+    // as long as the plugin holds this resource, and is undeclared when dropped.
+    resource liveliness-token {}
+
+    resource liveliness-sub {
+        try-recv: func() -> option<tuple<string, bool>>;
+    }
+
+    resource queryable {
+        try-recv-query: func() -> option<tuple<u64, list<u8>>>;
+        reply: func(query-id: u64, payload: list<u8>) -> result<_, plugin-error>;
+    }
+
+    resource querier {
+        call: func(payload: list<u8>, timeout-ms: u32) -> result<list<u8>, plugin-error>;
+    }
+}
+
+interface session {
+    use types.{plugin-error};
+    use raw-transport.{
+        raw-subscription,
+        raw-publisher,
+        liveliness-token,
+        liveliness-sub,
+        queryable,
+        querier,
+    };
+
+    resource session-handle {
+        raw-subscribe: func(ke: string) -> result<raw-subscription, plugin-error>;
+        raw-publisher: func(ke: string) -> result<raw-publisher, plugin-error>;
+        declare-liveliness: func(ke: string) -> result<liveliness-token, plugin-error>;
+        subscribe-liveliness: func(ke: string) -> result<liveliness-sub, plugin-error>;
+        declare-queryable: func(ke: string) -> result<queryable, plugin-error>;
+        open-querier: func(ke: string) -> result<querier, plugin-error>;
+    }
+
+    get-session: func(name: string) -> result<session-handle, plugin-error>;
+}
+
+interface render {
+    println: func(text: string);
+    eprintln: func(text: string);
+    set-title: func(title: string);
+    emit-json: func(key: string, value: string);
+    exit: func(code: u32);
+}
+
+// HTTP record types for web plugins.
+interface web-types {
+    record http-request {
+        method: string,
+        path: string,
+        query: string,
+        body: list<u8>,
+    }
+
+    record http-response {
+        status: u16,
+        content-type: string,
+        body: list<u8>,
+    }
+}
+
+// ─── Worlds ──────────────────────────────────────────────────────────────────
+
+// CLI plugin: one-shot or tick-driven terminal tool.
+// Receives cli-event (no key-action / topic-selected dead arms).
+world hu-cli-plugin {
+    use types.{plugin-manifest, cli-event};
+
+    import graph;
+    import ros;
+    import raw-transport;
+    import session;
+    import render;
+
+    export manifest: func() -> plugin-manifest;
+    export on-event: func(event: cli-event);
+}
+
+// TUI plugin: tick-driven pane with keybindings and topic navigation.
+// Receives tui-event (full set including key-action and topic-selected).
+world hu-tui-plugin {
+    use types.{plugin-manifest, tui-event};
+
+    import graph;
+    import ros;
+    import raw-transport;
+    import session;
+    import render;
+
+    export manifest: func() -> plugin-manifest;
+    export on-event: func(event: tui-event);
+}
+
+// Web plugin: HTTP request/response handler.
+// The hu HTTP server routes incoming requests to this export.
+world hu-web-plugin {
+    use types.{plugin-manifest};
+    use web-types.{http-request, http-response};
+
+    import graph;
+    import ros;
+
+    export manifest: func() -> plugin-manifest;
+    export handle: func(req: http-request) -> http-response;
+}

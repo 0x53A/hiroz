@@ -57,26 +57,88 @@ jobs:
     container:
       image: ${{ matrix.image }}
     steps:
+      - name: Compute weekly cache key
+        id: cache-week
+        run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Cache apt packages
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
           key: apt-${{ matrix.distro }}-v3-${{ hashFiles('.github/workflows/test.yml') }}
 
+      # The apt package-index fetch (not the downloads) is the mirror bottleneck
+      # here (~900 B/s), costing minutes per job. Cache the index; keyed weekly
+      # so it can't go permanently stale — a miss just re-fetches.
+      - name: Cache apt package lists
+        uses: actions/cache@v4
+        with:
+          path: /var/lib/apt/lists
+          key: apt-lists-${{ matrix.distro }}-${{ steps.cache-week.outputs.week }}
+          restore-keys: |
+            apt-lists-${{ matrix.distro }}-
+
+      # GitHub runners are on Azure, but the ROS base images point at the
+      # generic archive/security.ubuntu.com endpoints, which are slow from here
+      # (~75-900 B/s). Repoint to Azure's same-datacenter mirror. Handles both
+      # the legacy one-line sources.list and the newer deb822 *.sources format.
+      - name: Point apt at the Azure Ubuntu mirror
+        run: |
+          if [ -f /etc/apt/sources.list ]; then
+            sed -i \
+              -e 's|http://archive\.ubuntu\.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' \
+              -e 's|http://security\.ubuntu\.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' \
+              /etc/apt/sources.list
+          fi
+          # Guard with `ls`: with nullglob off, a non-matching glob expands to
+          # the literal pattern, so don't rely on the match itself.
+          if ls /etc/apt/sources.list.d/*.sources > /dev/null 2>&1; then
+            sed -i \
+              -e 's|http://archive\.ubuntu\.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' \
+              -e 's|http://security\.ubuntu\.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' \
+              /etc/apt/sources.list.d/*.sources
+          fi
+
       - name: Install system dependencies
-        run: apt-get update && apt-get install -y nodejs
+        run: |
+          # Install jq here so taiki-e/install-action's cargo-nextest step
+          # below doesn't trigger a second, redundant apt-get update for it.
+          apt-get update && apt-get install -y nodejs jq
 
       - name: Install Nushell
         run: |
           NU_VERSION=0.102.0
           ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/')
           NU_TARBALL="nu-${NU_VERSION}-${ARCH}-unknown-linux-gnu"
-          curl -fsSL "https://github.com/nushell/nushell/releases/download/${NU_VERSION}/${NU_TARBALL}.tar.gz" \
-            | tar -xz -C /usr/local/bin --strip-components=1 "${NU_TARBALL}/nu"
+          # Download to a file. Do not pipe into tar.
+          #
+          # A piped curl reports a network failure as `gzip: stdin: unexpected
+          # end of file`. The step then takes its exit code from tar. A dropped
+          # connection therefore reads as a corrupt archive.
+          #
+          # A jazzy leg showed this. `curl: (56) Connection died` produced
+          # `tar: Error is not recoverable` and exit 2.
+          #
+          # `--retry` alone does not cover a connection reset mid-transfer.
+          # `--retry-all-errors` does.
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            -o nu.tar.gz \
+            "https://github.com/nushell/nushell/releases/download/${NU_VERSION}/${NU_TARBALL}.tar.gz"
+          tar -xzf nu.tar.gz -C /usr/local/bin --strip-components=1 "${NU_TARBALL}/nu"
+          rm -f nu.tar.gz
 
       - name: Install ROS dependencies
         run: |
+          # Name `ros-<distro>-rclcpp` explicitly. apt then upgrades the copy
+          # baked into the image. Every other package here comes from the
+          # repository. If the image is stale, the two disagree on ABI. The
+          # mismatch then corrupts memory instead of failing to link.
+          #
+          # #303 carries the diagnosis: the version pair, the valgrind trace and
+          # the hypotheses it ruled out. Keep them there. A version number in a
+          # comment goes stale, and a stale comment is worse than none.
           apt-get install -y \
+            ros-${{ matrix.distro }}-rclcpp \
             ros-${{ matrix.distro }}-example-interfaces \
             ros-${{ matrix.distro }}-rmw-zenoh-cpp \
             ros-${{ matrix.distro }}-demo-nodes-cpp \
@@ -85,6 +147,48 @@ jobs:
             ros-${{ matrix.distro }}-sensor-msgs \
             ros-${{ matrix.distro }}-nav-msgs \
             protobuf-compiler
+
+      # An interop run tests hiroz against a specific set of ROS binaries.
+      # Nothing recorded which ones.
+      #
+      # When the lyrical leg started to fail, the logs could not answer the
+      # first question: what changed? A re-run replaces the job's log. The
+      # inputs of the last good run had therefore already gone. See #303.
+      #
+      # Recording them costs a second. It makes any two runs comparable. It
+      # also ruled out three hypotheses in #303.
+      - name: Record what this run tests against
+        run: |
+          echo "::group::Environment under test"
+          echo "distro: ${{ matrix.distro }}"
+          echo "image:  ${{ matrix.image }}   (floating tag — see versions below)"
+          grep -E '^(NAME|VERSION)=' /etc/os-release || true
+          # The core libraries come first. They are the point.
+          #
+          # apt installs the four application packages below from the
+          # repository on every run. Those packages therefore always read as
+          # current. Only the core libraries carry the image-versus-repository
+          # skew that caused #303.
+          #
+          # A list of the application packages alone would report "nothing
+          # changed" for the exact failure this step must explain.
+          echo "--- ROS core libraries (where image/repo skew shows up) ---"
+          dpkg-query -W -f='${Package} ${Version}\n' \
+            "ros-${{ matrix.distro }}-rclcpp" \
+            "ros-${{ matrix.distro }}-rcl" \
+            "ros-${{ matrix.distro }}-rmw" \
+            "ros-${{ matrix.distro }}-rcutils" \
+            "ros-${{ matrix.distro }}-rcpputils" \
+            "ros-${{ matrix.distro }}-rosidl-runtime-c" 2>&1 || true
+          echo "--- ROS packages under test ---"
+          dpkg-query -W -f='${Package} ${Version}\n' \
+            "ros-${{ matrix.distro }}-rmw-zenoh-cpp" \
+            "ros-${{ matrix.distro }}-demo-nodes-cpp" \
+            "ros-${{ matrix.distro }}-example-interfaces" \
+            "ros-${{ matrix.distro }}-action-tutorials-cpp" 2>&1 || true
+          echo "--- C runtime (glibc detects the heap corruption in #303) ---"
+          dpkg-query -W -f='${Package} ${Version}\n' libc6 2>&1 || true
+          echo "::endgroup::"
 
       - name: Fix broken rmw_zenoh_cpp config for Kilted
         if: matrix.distro == 'kilted'
@@ -123,9 +227,13 @@ jobs:
           else
             cargo nextest run -p hiroz-tests --profile interop \
               --features "ros-interop,$FEATURES"
-            cargo nextest run -p hiroz-console --profile interop \
+            # dynamic_subscriber tests are all #[ignore]'d in CI (ros2 topic
+            # pub isn't graph-visible under CI's rmw_zenoh_cpp — see
+            # headless_test.rs). --no-tests=warn keeps that from failing the job.
+            cargo nextest run -p hiroz-union --profile interop \
               --features ros-interop \
-              -E 'test(dynamic_subscriber)'
+              -E 'test(dynamic_subscriber)' \
+              --no-tests=warn
           fi
 
       - uses: actions/setup-go@v5

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+use crate::reentrancy::TrackedMutex;
 use zenoh::Result;
 
 use crate::GidArray;
@@ -35,10 +37,29 @@ pub struct ZenohEventStatus {
     pub last_policy_kind: u32, // RMW QoS policy kind that caused incompatibility
 }
 
-// Event callback type
-pub type EventCallback = Box<dyn Fn(i32) + Send + Sync>;
+// Event callback type.
+//
+// `Arc` rather than `Box` so that a callback can be *collected* while the
+// registry lock is held and *invoked* after it has been released. Event
+// callbacks are user code (the rmw layer hands them straight to an rclcpp
+// executor), and they routinely re-enter hiroz — querying the graph,
+// publishing, unregistering an entity. Invoking them under the registry guard
+// makes any such re-entry a self-deadlock on a non-reentrant `Mutex`.
+pub type EventCallback = Arc<dyn Fn(i32) + Send + Sync>;
 
-// EventsManager - manages event state for a single publisher/subscription
+/// Event state for a single publisher/subscription.
+///
+/// # The `&mut self` rule
+///
+/// This type is shared as `Arc<Mutex<EventsManager>>`, so **`&mut self` proves
+/// the caller holds that outer mutex**. Any `&mut self` method that invoked a
+/// callback would therefore run user code under a lock the same thread already
+/// holds — and these callbacks re-enter (`rmw_take_event` →
+/// [`RmEventHandle::take_event`], or `set_callback` to re-arm). Non-reentrant
+/// mutex, one thread, no race: a guaranteed deadlock.
+///
+/// So the `&mut self` methods here *return* the callback instead, and
+/// [`update_shared_event_status`] is the entry point holders actually use.
 pub struct EventsManager {
     event_statuses: Vec<ZenohEventStatus>,
     event_callbacks: Vec<Option<EventCallback>>,
@@ -60,33 +81,78 @@ impl EventsManager {
         }
     }
 
+    /// Install a callback, delivering any backlog immediately.
+    ///
+    /// **Only for a caller that owns this manager outright.** It fires the
+    /// backlog while the caller's outer guard is still live — the lock this
+    /// releases is only the *inner* `event_mutex` — so a re-entering callback
+    /// deadlocks. See the `&mut self` note on [`EventsManager`]; holders of an
+    /// `Arc<Mutex<..>>` want [`RmEventHandle::set_callback`] instead.
     pub fn set_callback<F>(&mut self, event_type: ZenohEventType, callback: F)
     where
         F: Fn(i32) + Send + Sync + 'static,
     {
+        let callback: EventCallback = Arc::new(callback);
+        let unread_count = self.install_callback(event_type, callback.clone());
+        // Outside the inner `event_mutex` only — see the note above.
+        if unread_count != 0 {
+            callback(unread_count);
+        }
+    }
+
+    /// Install `callback` and take (clearing) the unread-event backlog.
+    ///
+    /// Deliberately does *not* invoke the callback: the caller fires it after
+    /// releasing every lock it holds, including the outer `Mutex<EventsManager>`
+    /// that [`RmEventHandle`] uses. Returns the backlog count, or 0 if none.
+    pub fn install_callback(&mut self, event_type: ZenohEventType, callback: EventCallback) -> i32 {
         let event_id = event_type as usize;
         let _lock = self.event_mutex.lock().unwrap();
 
-        // If there are unread events, trigger the callback immediately
         let unread_count = self.event_statuses[event_id].total_count_change;
         if unread_count != 0 {
-            callback(unread_count);
             self.event_statuses[event_id].total_count_change = 0;
         }
+        self.event_callbacks[event_id] = Some(callback);
 
-        self.event_callbacks[event_id] = Some(Box::new(callback));
+        unread_count
     }
 
+    /// Record a status change and invoke the registered callback, if any.
+    ///
+    /// Only safe when the caller does not hold the outer `Mutex<EventsManager>`
+    /// — see [`update_shared_event_status`], which is what every holder of an
+    /// `Arc<Mutex<EventsManager>>` must use instead.
     pub fn update_event_status(&mut self, event_type: ZenohEventType, change: i32) {
         self.update_event_status_with_policy(event_type, change, 0);
     }
 
+    /// See [`EventsManager::update_event_status`] for the locking caveat.
     pub fn update_event_status_with_policy(
         &mut self,
         event_type: ZenohEventType,
         change: i32,
         policy_kind: u32,
     ) {
+        if let Some(callback) =
+            self.record_event_status_with_policy(event_type, change, policy_kind)
+        {
+            callback(change);
+        }
+    }
+
+    /// Record a status change and hand back the callback that owes a
+    /// notification, *without* invoking it.
+    ///
+    /// Not invoking is the point: see the `&mut self` note on
+    /// [`EventsManager`]. The caller invokes once every guard is dropped.
+    #[must_use = "the returned callback must be invoked after every guard is dropped"]
+    pub fn record_event_status_with_policy(
+        &mut self,
+        event_type: ZenohEventType,
+        change: i32,
+        policy_kind: u32,
+    ) -> Option<EventCallback> {
         let event_id = event_type as usize;
 
         {
@@ -104,10 +170,7 @@ impl EventsManager {
             }
         }
 
-        // Trigger callback if registered
-        if let Some(ref callback) = self.event_callbacks[event_id] {
-            callback(change);
-        }
+        self.event_callbacks[event_id].clone()
     }
 
     pub fn take_event_status(&mut self, event_type: ZenohEventType) -> ZenohEventStatus {
@@ -128,15 +191,33 @@ impl EventsManager {
     }
 }
 
-// Callback type for triggering graph guard conditions
-pub type GraphGuardConditionTrigger = Box<dyn Fn(*mut std::ffi::c_void) + Send + Sync>;
+/// A graph guard condition this manager may trigger on a graph change.
+///
+/// Registrations are **owned**, not raw pointers, and that is the whole point.
+/// Triggering happens with the registry lock released — it must, since the
+/// trigger re-enters hiroz — and a raw pointer cloned out of the lock is only
+/// valid if something keeps the target alive across the call. Nothing did:
+/// `rmw_destroy_node` unregisters and immediately frees, so a destroy landing
+/// mid-call dereferenced freed memory.
+///
+/// **Implementors must keep [`trigger`] valid after the owning C object is
+/// gone.** The natural shape is state behind its own `Arc`, one reference held
+/// by the C handle and one by this registry.
+///
+/// [`trigger`]: GraphGuardCondition::trigger
+pub trait GraphGuardCondition: Send + Sync {
+    /// Wake whatever is waiting on this guard condition.
+    ///
+    /// Called with no hiroz lock held, possibly concurrently, and possibly
+    /// after the corresponding C handle has been destroyed.
+    fn trigger(&self);
+}
 
 // GraphCache event integration
 pub struct GraphEventManager {
-    event_callbacks: Mutex<HashMap<GidArray, HashMap<ZenohEventType, EventCallback>>>,
-    entity_topics: Mutex<HashMap<GidArray, String>>, // Topic name per registered entity
-    graph_guard_conditions: Mutex<Vec<usize>>,       // Pointers as usize for Send
-    trigger_guard_condition: Mutex<Option<GraphGuardConditionTrigger>>,
+    event_callbacks: TrackedMutex<HashMap<GidArray, HashMap<ZenohEventType, EventCallback>>>,
+    entity_topics: TrackedMutex<HashMap<GidArray, String>>, // Topic name per registered entity
+    graph_guard_conditions: TrackedMutex<Vec<Arc<dyn GraphGuardCondition>>>,
 }
 
 impl Default for GraphEventManager {
@@ -148,15 +229,10 @@ impl Default for GraphEventManager {
 impl GraphEventManager {
     pub fn new() -> Self {
         Self {
-            event_callbacks: Mutex::new(HashMap::new()),
-            entity_topics: Mutex::new(HashMap::new()),
-            graph_guard_conditions: Mutex::new(Vec::new()),
-            trigger_guard_condition: Mutex::new(None),
+            event_callbacks: TrackedMutex::new(HashMap::new()),
+            entity_topics: TrackedMutex::new(HashMap::new()),
+            graph_guard_conditions: TrackedMutex::new(Vec::new()),
         }
-    }
-
-    pub fn set_guard_condition_trigger(&self, trigger: GraphGuardConditionTrigger) {
-        *self.trigger_guard_condition.lock().unwrap() = Some(trigger);
     }
 
     pub fn register_event_callback<F>(
@@ -169,9 +245,11 @@ impl GraphEventManager {
     where
         F: Fn(i32) + Send + Sync + 'static,
     {
-        let mut callbacks = self.event_callbacks.lock().unwrap();
-        let entity_callbacks = callbacks.entry(entity_gid).or_default();
-        entity_callbacks.insert(event_type, Box::new(callback));
+        {
+            let mut callbacks = self.event_callbacks.lock().unwrap();
+            let entity_callbacks = callbacks.entry(entity_gid).or_default();
+            entity_callbacks.insert(event_type, Arc::new(callback));
+        }
 
         let mut topics = self.entity_topics.lock().unwrap();
         topics.insert(entity_gid, topic);
@@ -180,21 +258,36 @@ impl GraphEventManager {
     }
 
     pub fn unregister_entity(&self, entity_gid: &GidArray) {
-        let mut callbacks = self.event_callbacks.lock().unwrap();
-        callbacks.remove(entity_gid);
+        // Scoped so the two registries are never held at the same time.
+        {
+            let mut callbacks = self.event_callbacks.lock().unwrap();
+            callbacks.remove(entity_gid);
+        }
         let mut topics = self.entity_topics.lock().unwrap();
         topics.remove(entity_gid);
     }
 
-    pub fn register_graph_guard_condition(&self, guard_condition: *mut std::ffi::c_void) {
+    /// Register a guard condition to be triggered on every graph change.
+    ///
+    /// The manager keeps the `Arc` alive for as long as it is registered, and
+    /// for the duration of any trigger already in flight — see
+    /// [`GraphGuardCondition`] for why that ownership is load-bearing.
+    pub fn register_graph_guard_condition(&self, guard_condition: Arc<dyn GraphGuardCondition>) {
         let mut conditions = self.graph_guard_conditions.lock().unwrap();
-        conditions.push(guard_condition as usize);
+        conditions.push(guard_condition);
     }
 
-    pub fn unregister_graph_guard_condition(&self, guard_condition: *mut std::ffi::c_void) {
+    /// Stop triggering `guard_condition`.
+    ///
+    /// Identity is `Arc::ptr_eq`, so the caller must pass the same allocation it
+    /// registered. Returning does **not** mean no trigger is in flight: a
+    /// concurrent [`Self::trigger_graph_change`] may already hold its own clone
+    /// and be calling into it. That is exactly why the registration is owned —
+    /// the in-flight call keeps the target alive, so a caller that frees its own
+    /// handle immediately after this returns is still safe.
+    pub fn unregister_graph_guard_condition(&self, guard_condition: &Arc<dyn GraphGuardCondition>) {
         let mut conditions = self.graph_guard_conditions.lock().unwrap();
-        let gc_usize = guard_condition as usize;
-        conditions.retain(|&gc| gc != gc_usize);
+        conditions.retain(|gc| !Arc::ptr_eq(gc, guard_condition));
     }
 
     pub fn trigger_event(&self, entity_gid: &GidArray, event_type: ZenohEventType, change: i32) {
@@ -223,11 +316,20 @@ impl GraphEventManager {
             change
         };
 
-        let callbacks = self.event_callbacks.lock().unwrap();
-        if let Some(entity_callbacks) = callbacks.get(entity_gid)
-            && let Some(callback) = entity_callbacks.get(&event_type)
-        {
-            callback(encoded_change);
+        // Collect under the lock, invoke after it is released — see [`EventCallback`].
+        let callback = {
+            let callbacks = self.event_callbacks.lock().unwrap();
+            callbacks
+                .get(entity_gid)
+                .and_then(|entity_callbacks| entity_callbacks.get(&event_type))
+                .cloned()
+        };
+
+        if let Some(callback) = callback {
+            crate::invoke_user_callback!(
+                "GraphEventManager::trigger_event_with_policy",
+                callback(encoded_change)
+            );
         }
     }
 
@@ -241,13 +343,17 @@ impl GraphEventManager {
 
         let change = if appeared { 1 } else { -1 };
 
-        // Trigger graph guard conditions for ALL graph changes (local and remote)
-        if let Some(ref trigger) = *self.trigger_guard_condition.lock().unwrap() {
-            let guard_conditions = self.graph_guard_conditions.lock().unwrap();
-            for &gc_usize in guard_conditions.iter() {
-                let gc = gc_usize as *mut std::ffi::c_void;
-                trigger(gc);
-            }
+        // Trigger graph guard conditions for ALL graph changes (local and remote).
+        //
+        // Snapshot, release the lock, then call — the trigger is rmw-side code
+        // and may re-enter this manager, so it must not run under the guard.
+        // The snapshot clones `Arc`s rather than raw pointers, which is what
+        // makes releasing the lock safe: a concurrent `rmw_destroy_node` can
+        // unregister and free its C handle here, and each in-flight trigger
+        // still holds the target alive until it returns.
+        let guard_conditions = self.graph_guard_conditions.lock().unwrap().clone();
+        for gc in guard_conditions {
+            gc.trigger();
         }
 
         // Determine which event type based on entity kind
@@ -268,16 +374,29 @@ impl GraphEventManager {
             _ => return,
         };
 
-        let entity_topics = self.entity_topics.lock().unwrap();
-        let callbacks = self.event_callbacks.lock().unwrap();
-        for (entity_gid, entity_callbacks) in callbacks.iter() {
-            // Only notify entities on the same topic
-            if let Some(registered_topic) = entity_topics.get(entity_gid)
-                && registered_topic == changed_topic
-                && let Some(callback) = entity_callbacks.get(&event_type)
-            {
-                callback(change);
-            }
+        // Collect the callbacks to notify, then drop both registry guards before
+        // invoking any of them — see [`EventCallback`]. Locks are taken in the
+        // same order as `register_event_callback` (callbacks, then topics).
+        let to_notify: Vec<EventCallback> = {
+            let callbacks = self.event_callbacks.lock().unwrap();
+            let entity_topics = self.entity_topics.lock().unwrap();
+            callbacks
+                .iter()
+                .filter(|(entity_gid, _)| {
+                    // Only notify entities on the same topic
+                    entity_topics
+                        .get(*entity_gid)
+                        .is_some_and(|registered_topic| registered_topic == changed_topic)
+                })
+                .filter_map(|(_, entity_callbacks)| entity_callbacks.get(&event_type).cloned())
+                .collect()
+        };
+
+        for callback in to_notify {
+            crate::invoke_user_callback!(
+                "GraphEventManager::trigger_graph_change",
+                callback(change)
+            );
         }
     }
 }
@@ -307,6 +426,56 @@ impl EventWaitData {
 
     pub fn set_triggered(&self, triggered: bool) {
         self.triggered.store(triggered, Ordering::Release);
+    }
+}
+
+/// Record an event-status change on a *shared* [`EventsManager`] and fire its
+/// callback with the manager lock released.
+///
+/// Holders of an `Arc<Mutex<EventsManager>>` must use this rather than locking
+/// and calling [`EventsManager::update_event_status`] directly: that keeps the
+/// outer guard alive across the callback, and the callback is user code handed
+/// to an rclcpp executor which routinely calls straight back into the same
+/// manager (`rmw_take_event` → [`RmEventHandle::take_event`]).
+pub fn update_shared_event_status(
+    events_mgr: &Mutex<EventsManager>,
+    event_type: ZenohEventType,
+    change: i32,
+) {
+    update_shared_event_status_with_policy(events_mgr, event_type, change, 0)
+}
+
+/// [`update_shared_event_status`] with a QoS policy kind.
+///
+/// # Known hazard
+///
+/// Releasing the guard also releases the mutual exclusion that used to
+/// serialise this against `RmEventHandle::set_callback`, so a concurrent detach
+/// can return — and rclcpp can free `user_data` — between the clone below and
+/// the call. The `Arc` keeps the *closure* alive; nothing owns the raw C
+/// pointer it captured.
+///
+/// Do not "fix" this by re-locking (that is the deadlock this removes) or by a
+/// flag checked in the closure (the free can land between check and call).
+/// Tracked with the design in hiroz#287.
+pub fn update_shared_event_status_with_policy(
+    events_mgr: &Mutex<EventsManager>,
+    event_type: ZenohEventType,
+    change: i32,
+    policy_kind: u32,
+) {
+    // The guard is bound to its own `let` inside a block on purpose. Written as
+    // a `match`/`if let` scrutinee it would stay alive across the invocation
+    // below and silently reinstate the deadlock this function exists to remove.
+    let callback = {
+        let Ok(mut mgr) = events_mgr.lock() else {
+            return;
+        };
+        mgr.record_event_status_with_policy(event_type, change, policy_kind)
+    };
+
+    if let Some(callback) = callback {
+        callback(change);
     }
 }
 
@@ -349,8 +518,16 @@ impl RmEventHandle {
     where
         F: Fn(i32) + Send + Sync + 'static,
     {
-        let mut mgr = self.events_mgr.lock().unwrap();
-        mgr.set_callback(self.event_type, callback);
+        let callback: EventCallback = Arc::new(callback);
+        // Install under the manager lock; fire the backlog notification after it
+        // is released so the callback may re-enter this handle.
+        let unread_count = {
+            let mut mgr = self.events_mgr.lock().unwrap();
+            mgr.install_callback(self.event_type, callback.clone())
+        };
+        if unread_count != 0 {
+            callback(unread_count);
+        }
     }
 }
 
@@ -566,5 +743,48 @@ mod tests {
             .unwrap()
             .update_event_status(ZenohEventType::LivelinessChanged, 3);
         assert_eq!(*fired.lock().unwrap(), 3);
+    }
+
+    /// The registry must **own** what it registers — the invariant that makes
+    /// triggering outside the lock safe. See [`GraphGuardCondition`].
+    ///
+    /// Pins the deterministic half: the registry keeps the value alive after
+    /// the registrant drops its handle, and releases it on unregister. It does
+    /// not try to schedule the destroy-during-trigger race, which would be a
+    /// timing test — ownership is what makes that race harmless.
+    #[test]
+    fn graph_guard_condition_registration_is_owned_by_the_manager() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingGc(Arc<AtomicUsize>);
+        impl GraphGuardCondition for CountingGc {
+            fn trigger(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let mgr = GraphEventManager::new();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let gc: Arc<dyn GraphGuardCondition> = Arc::new(CountingGc(hits.clone()));
+        let weak = Arc::downgrade(&gc);
+
+        mgr.register_graph_guard_condition(gc.clone());
+        drop(gc);
+        let held = weak.upgrade().expect(
+            "the manager must keep the registration alive after the registrant drops its handle; \
+             otherwise a trigger issued outside the lock dereferences freed memory",
+        );
+
+        // Still reachable and callable through the registry's own reference.
+        held.trigger();
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        mgr.unregister_graph_guard_condition(&held);
+        drop(held);
+        assert!(
+            weak.upgrade().is_none(),
+            "unregister must release the registry's reference, or registrations leak for the \
+             life of the process",
+        );
     }
 }

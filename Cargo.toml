@@ -8,7 +8,6 @@ repository = "https://github.com/ZettaScaleLabs/hiroz"
 
 [workspace]
 resolver = "2"
-exclude = ["examples/wasm-demo"]
 members = [
   "crates/hiroz",
   "crates/hiroz-cdr",
@@ -20,8 +19,17 @@ members = [
   "crates/hiroz-schema",
   "crates/hiroz-msgs",
   "crates/hiroz-tests",
-  "crates/hiroz-console",
+  "crates/hiroz-union",
   "crates/hiroz/examples/protobuf_demo",
+]
+# WASM plugins require --target wasm32-wasip2 and cannot be compiled as part of a
+# native workspace build. Build them explicitly:
+#   cargo build -p hu-meter --target wasm32-wasip2 --manifest-path crates/hiroz-union/plugins/hu-meter/Cargo.toml
+exclude = [
+  "examples/wasm-demo",
+  "crates/hiroz-union/plugins/hu-meter",
+  "crates/hiroz-union/plugins/hu-monitor",
+  "crates/hiroz-union/plugins/hu-plugin-template",
 ]
 default-members = ["crates/hiroz", "crates/hiroz-codegen"]
 # Note: protobuf_demo is an advanced example demonstrating protobuf serialization
@@ -46,9 +54,9 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 
 # Zenoh
-zenoh = { version = "1.9.0", default-features = false }
-zenoh-ext = { version = "1.9.0", default-features = false, features = ["unstable"] }
-zenoh-buffers = { version = "1.9.0" }
+zenoh = { version = "1.10.0", default-features = false }
+zenoh-ext = { version = "1.10.0", default-features = false, features = ["unstable"] }
+zenoh-buffers = { version = "1.10.0" }
 
 # CLI
 clap = "4.5.45"
