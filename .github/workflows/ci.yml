@@ -59,6 +59,21 @@ jobs:
       - name: Check formatting
         run: nix build .#checks.x86_64-linux.pre-commit-check -L
 
+  apt-retry:
+    name: CI apt wrapper
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Interop runs this wrapper, but only its success path. This runs the
+      # retries, the mirror switch and the guards. See hiroz#308.
+      - name: Test the apt retry wrapper
+        run: ./scripts/ci/test-apt-retry.sh
+
   no-ros-test:
     name: ROS-independent Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

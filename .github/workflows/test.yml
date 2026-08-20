@@ -57,6 +57,10 @@ jobs:
     container:
       image: ${{ matrix.image }}
     steps:
+      # Must stay first: the apt steps run `scripts/ci/apt-retry.sh`, and the
+      # cache key hashes this file, yielding a constant on an empty workspace.
+      - uses: actions/checkout@v4
+
       - name: Compute weekly cache key
         id: cache-week
         run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
@@ -67,9 +71,9 @@ jobs:
           path: /var/cache/apt/archives
           key: apt-${{ matrix.distro }}-v3-${{ hashFiles('.github/workflows/test.yml') }}
 
-      # The apt package-index fetch (not the downloads) is the mirror bottleneck
-      # here (~900 B/s), costing minutes per job. Cache the index; keyed weekly
-      # so it can't go permanently stale — a miss just re-fetches.
+      # Cache the package index, not just the .debs. A weekly key stops it
+      # going stale; a miss re-fetches. The rate that justified it does not
+      # reproduce -- see hiroz#308.
       - name: Cache apt package lists
         uses: actions/cache@v4
         with:
@@ -78,10 +82,14 @@ jobs:
           restore-keys: |
             apt-lists-${{ matrix.distro }}-
 
-      # GitHub runners are on Azure, but the ROS base images point at the
-      # generic archive/security.ubuntu.com endpoints, which are slow from here
-      # (~75-900 B/s). Repoint to Azure's same-datacenter mirror. Handles both
-      # the legacy one-line sources.list and the newer deb822 *.sources format.
+      # GitHub runners are on Azure, and the ROS base images point at the
+      # generic archive/security.ubuntu.com endpoints. Repoint to Azure's
+      # same-datacenter mirror. Handles both the legacy one-line sources.list
+      # and the newer deb822 *.sources format.
+      #
+      # This mirror is also the one that fails. It still wins: it beat
+      # archive.ubuntu.com in all 12 pairs on four runners, by 2x to 13x.
+      # apt-retry.sh covers the windows when it is down. See hiroz#308.
       - name: Point apt at the Azure Ubuntu mirror
         run: |
           if [ -f /etc/apt/sources.list ]; then
@@ -99,11 +107,17 @@ jobs:
               /etc/apt/sources.list.d/*.sources
           fi
 
+          # Every apt call below goes through `scripts/ci/apt-retry.sh`. This
+          # drop-in belongs here rather than in the wrapper: it is apt config,
+          # so it covers every apt call in the job, including any added later.
+          printf 'Acquire::Retries "3";\n' > /etc/apt/apt.conf.d/99-retries
+
       - name: Install system dependencies
         run: |
           # Install jq here so taiki-e/install-action's cargo-nextest step
           # below doesn't trigger a second, redundant apt-get update for it.
-          apt-get update && apt-get install -y nodejs jq
+          scripts/ci/apt-retry.sh apt-get update
+          scripts/ci/apt-retry.sh apt-get install -y nodejs jq
 
       - name: Install Nushell
         run: |
@@ -137,7 +151,7 @@ jobs:
           # #303 carries the diagnosis: the version pair, the valgrind trace and
           # the hypotheses it ruled out. Keep them there. A version number in a
           # comment goes stale, and a stale comment is worse than none.
-          apt-get install -y \
+          scripts/ci/apt-retry.sh apt-get install -y \
             ros-${{ matrix.distro }}-rclcpp \
             ros-${{ matrix.distro }}-example-interfaces \
             ros-${{ matrix.distro }}-rmw-zenoh-cpp \
@@ -199,8 +213,6 @@ jobs:
             sed -i '/transport_optimization:/,/},$/d' "$CONFIG_FILE"
             echo "Fixed rmw_zenoh_cpp config by removing invalid transport_optimization section"
           fi
-
-      - uses: actions/checkout@v4
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
