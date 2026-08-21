@@ -16,6 +16,35 @@ use super::super::state::{PluginState, ServiceClientData, SubscriptionData};
 use super::hu;
 use hu::plugin::types::PluginError;
 
+/// The longest time that a guest-supplied service timeout may suspend the
+/// epoch ticker.
+///
+/// `timeout-ms` crosses the WIT boundary as a `u32`, and the guest chooses its
+/// value. The host holds a `HostBlockGuard` across the reply wait. Without a
+/// clamp, a plugin picks how long the host stops preempting plugins. An
+/// unclamped `u32` allows about 49 days.
+///
+/// The watchdog exists to preempt a guest that does not yield. The guest must
+/// not control it. 60 s is far above any real service call. It is also far
+/// below a disabled ticker.
+const MAX_GUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Caps a guest-supplied timeout. The host writes a warning when it reduces the
+/// value, so that the plugin author sees why the timeout changed.
+fn clamp_guest_timeout(timeout_ms: u32) -> Duration {
+    let requested = Duration::from_millis(timeout_ms as u64);
+    if requested > MAX_GUEST_TIMEOUT {
+        tracing::warn!(
+            "plugin asked for a {}ms service timeout; clamping to {}ms",
+            timeout_ms,
+            MAX_GUEST_TIMEOUT.as_millis()
+        );
+        MAX_GUEST_TIMEOUT
+    } else {
+        requested
+    }
+}
+
 impl PluginState {
     /// The message type advertised by a live publisher or subscriber on `topic`,
     /// if any. Used both to build the concrete publish key (`resolve_topic_ke`)
@@ -190,11 +219,19 @@ impl hu::plugin::ros::Host for PluginState {
                 // Budget discovery independently; a slow/failed round-trip
                 // shouldn't look like a generic encode failure.
                 const DISCOVERY_TIMEOUT: Duration = Duration::from_millis(2000);
-                let discovered = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(
-                        node.discover_topic_schema_including_subscribers(&topic, DISCOVERY_TIMEOUT),
-                    )
-                })
+                let discovered = {
+                    // See `subscribe`: wall-clock waits are charged to the
+                    // guest's epoch budget unless the ticker is suspended.
+                    let _epoch = super::super::HostBlockGuard::enter();
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(
+                            node.discover_topic_schema_including_subscribers(
+                                &topic,
+                                DISCOVERY_TIMEOUT,
+                            ),
+                        )
+                    })
+                }
                 .map_err(|_| PluginError::NotFound)?;
                 if discovered.schema.type_name != type_name {
                     return Err(PluginError::Invalid(format!(
@@ -277,14 +314,18 @@ impl hu::plugin::ros::HostServiceClient for PluginState {
         // slow/failed discovery round-trip (two get_type_description queries)
         // can't consume the entire per-call timeout budget.
         const DISCOVERY_TIMEOUT: Duration = Duration::from_millis(2000);
-        let (req_schema, resp_schema) = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(node.discover_service_schema(
-                &service_name,
-                &req_type,
-                &resp_type,
-                DISCOVERY_TIMEOUT,
-            ))
-        })
+        let (req_schema, resp_schema) = {
+            // See `subscribe`: suspend the epoch ticker across the wait.
+            let _epoch = super::super::HostBlockGuard::enter();
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(node.discover_service_schema(
+                    &service_name,
+                    &req_type,
+                    &resp_type,
+                    DISCOVERY_TIMEOUT,
+                ))
+            })
+        }
         .map_err(|_| PluginError::NotFound)?;
 
         let req_value = parse_yaml_or_json(&request_json).map_err(PluginError::Invalid)?;
@@ -300,7 +341,7 @@ impl hu::plugin::ros::HostServiceClient for PluginState {
         let sn = self.alloc_rep() as i64;
         let attachment = hiroz::attachment::Attachment::new(sn, gid);
 
-        let timeout = Duration::from_millis(timeout_ms as u64);
+        let timeout = clamp_guest_timeout(timeout_ms);
         let replies = session
             .get(&ke)
             .payload(zenoh::bytes::ZBytes::from(req_cdr))
@@ -309,7 +350,13 @@ impl hu::plugin::ros::HostServiceClient for PluginState {
             .wait()
             .map_err(|e| e.to_string())?;
 
-        let reply = replies.recv().map_err(|_| PluginError::Timeout)?;
+        let reply = {
+            // The caller's own --timeout can exceed the guest's epoch budget, so
+            // suspend the ticker across the wait (see `subscribe`).
+            let _epoch = super::super::HostBlockGuard::enter();
+            replies.recv()
+        }
+        .map_err(|_| PluginError::Timeout)?;
         let sample = reply.result().map_err(|e| e.to_string())?;
         let resp_cdr = sample.payload().to_bytes().into_owned();
 
@@ -347,7 +394,7 @@ impl hu::plugin::ros::HostServiceClient for PluginState {
         let sn = self.alloc_rep() as i64;
         let attachment = hiroz::attachment::Attachment::new(sn, gid);
 
-        let timeout = Duration::from_millis(timeout_ms as u64);
+        let timeout = clamp_guest_timeout(timeout_ms);
         let replies = session
             .get(&ke)
             .payload(zenoh::bytes::ZBytes::from(payload))
@@ -356,7 +403,13 @@ impl hu::plugin::ros::HostServiceClient for PluginState {
             .wait()
             .map_err(|e| e.to_string())?;
 
-        let reply = replies.recv().map_err(|_| PluginError::Timeout)?;
+        let reply = {
+            // The caller's own --timeout can exceed the guest's epoch budget, so
+            // suspend the ticker across the wait (see `subscribe`).
+            let _epoch = super::super::HostBlockGuard::enter();
+            replies.recv()
+        }
+        .map_err(|_| PluginError::Timeout)?;
         let sample = reply.result().map_err(|e| e.to_string())?;
         Ok(sample.payload().to_bytes().into_owned())
     }
@@ -530,5 +583,33 @@ mod service_type_name_tests {
                 "example_interfaces/msg/AddTwoIntsResponse".to_string(),
             )
         );
+    }
+}
+
+#[cfg(test)]
+mod guest_timeout_tests {
+    use super::{MAX_GUEST_TIMEOUT, clamp_guest_timeout};
+    use std::time::Duration;
+
+    // This clamp stops a guest-supplied `timeout-ms` from deciding how long the
+    // host suspends the epoch ticker. That suspension covers every plugin in
+    // the process. A later edit can delete the clamp in one line.
+    #[test]
+    fn a_reasonable_timeout_passes_through() {
+        assert_eq!(clamp_guest_timeout(2_000), Duration::from_millis(2_000));
+    }
+
+    #[test]
+    fn the_maximum_itself_is_not_clamped() {
+        assert_eq!(
+            clamp_guest_timeout(MAX_GUEST_TIMEOUT.as_millis() as u32),
+            MAX_GUEST_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn an_absurd_timeout_is_clamped() {
+        // ~49 days, the worst a u32 can ask for.
+        assert_eq!(clamp_guest_timeout(u32::MAX), MAX_GUEST_TIMEOUT);
     }
 }
