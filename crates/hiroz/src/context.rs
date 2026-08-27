@@ -679,6 +679,7 @@ impl ZContext {
                 Some(self.namespace.clone())
             },
             enable_communication_interface: true,
+            type_description_service: false,
         }
     }
 
