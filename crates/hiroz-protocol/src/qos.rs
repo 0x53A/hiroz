@@ -77,7 +77,7 @@ impl QosProfile {
 
         // Parse reliability (RMW values: 1=Reliable, 2=BestEffort)
         let reliability = match fields[0] {
-            "" => default_qos.reliability,
+            "" | "0" => default_qos.reliability,
             "1" => QosReliability::Reliable,
             "2" => QosReliability::BestEffort,
             _ => return Err(QosDecodeError::InvalidReliability),
@@ -85,35 +85,45 @@ impl QosProfile {
 
         // Parse durability (RMW values: 1=TransientLocal, 2=Volatile)
         let durability = match fields[1] {
-            "" => default_qos.durability,
+            "" | "0" => default_qos.durability,
             "1" => QosDurability::TransientLocal,
             "2" => QosDurability::Volatile,
             _ => return Err(QosDecodeError::InvalidDurability),
         };
 
-        // Parse history: <kind>,<depth>
-        let history_parts: alloc::vec::Vec<&str> = fields[2].split(',').collect();
-        if history_parts.len() < 2 {
-            return Err(QosDecodeError::InvalidHistory);
-        }
+        // Parse history: <kind>,<depth>. rmw_zenoh_cpp omits QoS sub-fields
+        // whose value is SYSTEM_DEFAULT, so the history field can be just `,`.
+        let history = match fields[2] {
+            "," => default_qos.history,
+            // An omitted history field is only meaningful in the complete
+            // six-field wire representation. Keep rejecting truncated `::`.
+            "" if fields.len() >= 6 => default_qos.history,
+            encoded => {
+                let (kind, encoded_depth) = encoded
+                    .split_once(',')
+                    .ok_or(QosDecodeError::InvalidHistory)?;
 
-        let history = match history_parts[0] {
-            "" | "1" => {
-                // rmw_zenoh_cpp leaves both history kind and depth empty for
-                // SYSTEM_DEFAULT QoS (the resulting field is just `,`).
-                // Treat an omitted depth as our ROS-compatible default rather
-                // than rejecting the entire liveliness token.
-                let depth = if history_parts[1].is_empty() {
-                    default_qos.history.depth()
-                } else {
-                    history_parts[1]
-                        .parse::<usize>()
-                        .map_err(|_| QosDecodeError::InvalidHistory)?
-                };
-                QosHistory::KeepLast(depth)
+                match kind {
+                    "" | "0" | "1" => {
+                        let depth = if encoded_depth.is_empty() {
+                            default_qos.history.depth()
+                        } else {
+                            encoded_depth
+                                .parse::<usize>()
+                                .map_err(|_| QosDecodeError::InvalidHistory)?
+                        };
+                        // A zero depth represents an unspecified/default depth
+                        // at the ROS boundary; KeepLast(0) is not useful.
+                        QosHistory::KeepLast(if depth == 0 {
+                            default_qos.history.depth()
+                        } else {
+                            depth
+                        })
+                    }
+                    "2" => QosHistory::KeepAll,
+                    _ => return Err(QosDecodeError::InvalidHistory),
+                }
             }
-            "2" => QosHistory::KeepAll,
-            _ => return Err(QosDecodeError::InvalidHistory),
         };
 
         Ok(QosProfile {
@@ -195,24 +205,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decode_rmw_system_default_history() {
-        let decoded = QosProfile::decode("::,:,:,:,,").unwrap();
+    fn decode_rmw_compact_qos_corpus() {
+        let cases = [
+            ("::,:,:,:,,", QosProfile::default()),
+            (":::,:,:,,", QosProfile::default()),
+            ("::1,:,:,:,,", QosProfile::default()),
+            ("::,10:,:,:,,", QosProfile::default()),
+            (
+                "::2,:,:,:,,",
+                QosProfile {
+                    history: QosHistory::KeepAll,
+                    ..QosProfile::default()
+                },
+            ),
+            (
+                "1:1:,5:,:,:,,",
+                QosProfile {
+                    durability: QosDurability::TransientLocal,
+                    history: QosHistory::KeepLast(5),
+                    ..QosProfile::default()
+                },
+            ),
+            (
+                "2::,1:,:,:,,",
+                QosProfile {
+                    reliability: QosReliability::BestEffort,
+                    history: QosHistory::KeepLast(1),
+                    ..QosProfile::default()
+                },
+            ),
+            ("0:0:0,0:,:,:,,", QosProfile::default()),
+        ];
 
-        assert_eq!(decoded, QosProfile::default());
+        for (encoded, expected) in cases {
+            assert_eq!(QosProfile::decode(encoded), Ok(expected), "{encoded}");
+        }
     }
 
     #[test]
-    fn decode_explicit_keep_last_with_default_depth() {
-        let decoded = QosProfile::decode("::1,:,:,:,,").unwrap();
+    fn qos_round_trip() {
+        let profiles = [
+            QosProfile::default(),
+            QosProfile {
+                reliability: QosReliability::BestEffort,
+                durability: QosDurability::TransientLocal,
+                history: QosHistory::KeepLast(5),
+            },
+            QosProfile {
+                history: QosHistory::KeepAll,
+                ..QosProfile::default()
+            },
+        ];
 
-        assert_eq!(decoded.history, QosHistory::KeepLast(10));
+        for profile in profiles {
+            assert_eq!(QosProfile::decode(&profile.encode()), Ok(profile));
+        }
     }
 
     #[test]
-    fn reject_non_numeric_history_depth() {
-        assert_eq!(
-            QosProfile::decode("::1,not-a-number:,:,:,,"),
-            Err(QosDecodeError::InvalidHistory)
-        );
+    fn reject_invalid_history() {
+        for encoded in ["::3,1:,:,:,,", "::1,-1:,:,:,,", "::"] {
+            assert_eq!(
+                QosProfile::decode(encoded),
+                Err(QosDecodeError::InvalidHistory),
+                "{encoded}"
+            );
+        }
     }
 }

@@ -4,7 +4,7 @@ use slab::Slab;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Condvar, Mutex as StdMutex, Weak},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
 use tokio::sync::Notify;
 use tracing::debug;
@@ -435,7 +435,7 @@ pub struct Graph {
     /// The liveliness callback holds `data` first, then releases it, then acquires this
     /// mutex — so both locks are never held simultaneously.
     pub change_signal: Arc<(StdMutex<()>, Condvar)>,
-    _subscriber: Arc<Mutex<Option<Subscriber<()>>>>,
+    _subscriber: Subscriber<()>,
 }
 
 impl std::fmt::Debug for Graph {
@@ -456,24 +456,11 @@ impl Graph {
         domain_id: usize,
         format: hiroz_protocol::KeyExprFormat,
     ) -> Result<Self> {
-        Self::new_with_bootstrap_delay(session, domain_id, format, Duration::ZERO)
-    }
-
-    pub fn new_with_bootstrap_delay(
-        session: &Session,
-        domain_id: usize,
-        format: hiroz_protocol::KeyExprFormat,
-        bootstrap_delay: Duration,
-    ) -> Result<Self> {
         let liveliness_pattern = format.liveliness_pattern(domain_id);
 
-        Self::new_with_pattern_and_bootstrap_delay(
-            session,
-            domain_id,
-            liveliness_pattern,
-            bootstrap_delay,
-            move |ke| format.parse_liveliness(ke),
-        )
+        Self::new_with_pattern(session, domain_id, liveliness_pattern, move |ke| {
+            format.parse_liveliness(ke)
+        })
     }
 
     pub(crate) async fn wait_until<F>(&self, timeout: Duration, predicate: F) -> bool
@@ -587,27 +574,8 @@ impl Graph {
     /// * RmwZenoh: `@ros2_lv/{domain_id}/**`
     pub fn new_with_pattern<F>(
         session: &Session,
-        domain_id: usize,
-        liveliness_pattern: String,
-        parser: F,
-    ) -> Result<Self>
-    where
-        F: Fn(&zenoh::key_expr::KeyExpr) -> Result<Entity> + Send + Sync + 'static,
-    {
-        Self::new_with_pattern_and_bootstrap_delay(
-            session,
-            domain_id,
-            liveliness_pattern,
-            Duration::ZERO,
-            parser,
-        )
-    }
-
-    fn new_with_pattern_and_bootstrap_delay<F>(
-        session: &Session,
         _domain_id: usize,
         liveliness_pattern: String,
-        bootstrap_delay: Duration,
         parser: F,
     ) -> Result<Self>
     where
@@ -626,30 +594,11 @@ impl Graph {
         let c_zid = zid;
         let c_liveliness_pattern = liveliness_pattern.clone();
         let callback_parser = parser_arc.clone();
-        let query_graph_data = graph_data.clone();
-        let query_parser = parser_arc.clone();
-        let subscriber_slot = Arc::new(Mutex::new(None));
-        let c_subscriber_slot = subscriber_slot.clone();
-        let bootstrap_session = session.clone();
-        let (bootstrap_ready_tx, bootstrap_ready_rx) = std::sync::mpsc::sync_channel(1);
-
-        // Zenoh can hold its session-state lock for an unbounded time while a
-        // newly connected client ingests a large ROS graph. Bootstrap discovery
-        // in the background so context construction and local entity declaration
-        // are never held hostage by that remote graph synchronization.
-        let bootstrap_result = std::thread::Builder::new()
-            .name("hiroz-graph-bootstrap".to_owned())
-            .spawn(move || {
-                const LIVELINESS_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
-
-                std::thread::sleep(bootstrap_delay);
-                tracing::debug!(
-                    "Creating liveliness subscriber for {}",
-                    c_liveliness_pattern
-                );
-                let sub = match bootstrap_session
+        tracing::debug!("Creating liveliness subscriber for {}", liveliness_pattern);
+        let sub = session
             .liveliness()
-            .declare_subscriber(&c_liveliness_pattern)
+            .declare_subscriber(&liveliness_pattern)
+            .history(true)
             .callback(move |sample| {
                 let key_expr = sample.key_expr().to_owned();
                 let ke = LivelinessKE(key_expr.clone());
@@ -735,34 +684,16 @@ impl Graph {
                 // so the callback must never hold data while acquiring change_signal.0.
                 c_change_signal.1.notify_all();
             })
-            .wait()
-                {
-                    Ok(sub) => sub,
-                    Err(error) => {
-                        tracing::warn!("Failed to initialize graph subscriber: {error}");
-                        return;
-                    }
-                };
-                *c_subscriber_slot.lock() = Some(sub);
-                let _ = bootstrap_ready_tx.send(());
+            .wait()?;
 
-        // Query existing liveliness tokens from all connected sessions. The live
-        // subscriber is declared first so entities appearing during this query
-        // cannot be missed. Do not also request subscriber history here: on a
-        // large ROS graph that makes declaration itself an unbounded blocking
-        // bootstrap, before the bounded query below can apply its timeout.
-        let replies = match bootstrap_session
+        // Query existing liveliness tokens from all connected sessions
+        // This is crucial for cross-context discovery where entities from other sessions
+        // were created before this session started
+        let replies = session
             .liveliness()
             .get(&c_liveliness_pattern)
-            .timeout(LIVELINESS_QUERY_TIMEOUT)
-            .wait()
-        {
-            Ok(replies) => replies,
-            Err(error) => {
-                tracing::warn!("Failed to query initial graph snapshot: {error}");
-                return;
-            }
-        };
+            .timeout(std::time::Duration::from_secs(3))
+            .wait()?;
 
         // Process all replies and add them to the graph.
         // Filter current-session entities: add_local_entity() already inserted them, so
@@ -771,21 +702,13 @@ impl Graph {
         // Endpoints without node identity carry no z_id and are never filtered.
         let mut reply_count = 0;
         let mut filtered_count = 0;
-        // Zenoh's query timeout does not always close the reply channel when a
-        // router remains connected. Apply the same timeout to the receive side
-        // so graph construction cannot wait forever after processing the
-        // current snapshot.
-        let reply_deadline = Instant::now() + LIVELINESS_QUERY_TIMEOUT;
-        while Instant::now() < reply_deadline {
-            let Ok(Some(reply)) = replies.recv_deadline(reply_deadline) else {
-                break;
-            };
+        while let Ok(reply) = replies.recv() {
             reply_count += 1;
             if let Ok(sample) = reply.into_result() {
                 let key_expr = sample.key_expr().to_owned();
                 let ke = LivelinessKE(key_expr.clone());
 
-                if let Ok(entity) = query_parser(&key_expr) {
+                if let Ok(entity) = parser_arc(&key_expr) {
                     let is_local = match &entity {
                         Entity::Node(node) => node.z_id == zid,
                         Entity::Endpoint(endpoint) => {
@@ -800,7 +723,7 @@ impl Graph {
                 }
 
                 tracing::debug!("Graph: Caching cross-context entity: {}", key_expr.as_str());
-                query_graph_data.lock().insert(ke);
+                graph_data.lock().insert(ke);
             }
         }
         tracing::debug!(
@@ -808,18 +731,9 @@ impl Graph {
             reply_count,
             filtered_count
         );
-            });
-
-        if let Err(error) = bootstrap_result {
-            return Err(format!("Failed to spawn graph bootstrap thread: {error}").into());
-        }
-        // Preserve synchronous discovery for the usual small/local graph. On a
-        // congested router this short wait expires and local entity creation can
-        // proceed while remote discovery continues in the bootstrap thread.
-        let _ = bootstrap_ready_rx.recv_timeout(Duration::from_millis(100));
 
         Ok(Self {
-            _subscriber: subscriber_slot,
+            _subscriber: sub,
             data: graph_data,
             event_manager,
             change_notify,
