@@ -99,10 +99,17 @@ impl QosProfile {
 
         let history = match history_parts[0] {
             "" | "1" => {
-                // KeepLast - parse depth
-                let depth = history_parts[1]
-                    .parse::<usize>()
-                    .map_err(|_| QosDecodeError::InvalidHistory)?;
+                // rmw_zenoh_cpp leaves both history kind and depth empty for
+                // SYSTEM_DEFAULT QoS (the resulting field is just `,`).
+                // Treat an omitted depth as our ROS-compatible default rather
+                // than rejecting the entire liveliness token.
+                let depth = if history_parts[1].is_empty() {
+                    default_qos.history.depth()
+                } else {
+                    history_parts[1]
+                        .parse::<usize>()
+                        .map_err(|_| QosDecodeError::InvalidHistory)?
+                };
                 QosHistory::KeepLast(depth)
             }
             "2" => QosHistory::KeepAll,
@@ -180,5 +187,32 @@ impl Display for QosDecodeError {
             QosDecodeError::InvalidDurability => write!(f, "Invalid durability value"),
             QosDecodeError::InvalidHistory => write!(f, "Invalid history value"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_rmw_system_default_history() {
+        let decoded = QosProfile::decode("::,:,:,:,,").unwrap();
+
+        assert_eq!(decoded, QosProfile::default());
+    }
+
+    #[test]
+    fn decode_explicit_keep_last_with_default_depth() {
+        let decoded = QosProfile::decode("::1,:,:,:,,").unwrap();
+
+        assert_eq!(decoded.history, QosHistory::KeepLast(10));
+    }
+
+    #[test]
+    fn reject_non_numeric_history_depth() {
+        assert_eq!(
+            QosProfile::decode("::1,not-a-number:,:,:,,"),
+            Err(QosDecodeError::InvalidHistory)
+        );
     }
 }

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, atomic::AtomicUsize},
+    time::Duration,
 };
 
 use tracing::{debug, warn};
@@ -84,12 +85,20 @@ pub struct ZContextBuilder {
     shm_config: Option<Arc<crate::shm::ShmConfig>>,
     keyexpr_format: hiroz_protocol::KeyExprFormat,
     clock: Option<ZClock>,
+    graph_bootstrap_delay: Duration,
 }
 
 impl ZContextBuilder {
     /// Set the ROS domain ID
     pub fn with_domain_id(mut self, domain_id: usize) -> Self {
         self.domain_id = domain_id;
+        self
+    }
+
+    /// Delay remote graph discovery so latency-sensitive local entities can be
+    /// declared before a large router graph is synchronized.
+    pub fn with_graph_bootstrap_delay(mut self, delay: Duration) -> Self {
+        self.graph_bootstrap_delay = delay;
         self
     }
 
@@ -551,10 +560,11 @@ impl Builder for ZContextBuilder {
         }
 
         let domain_id = builder.domain_id;
-        let graph = Arc::new(Graph::new(
+        let graph = Arc::new(Graph::new_with_bootstrap_delay(
             &session,
             domain_id,
             builder.keyexpr_format.clone(),
+            builder.graph_bootstrap_delay,
         )?);
 
         Ok(ZContext {
