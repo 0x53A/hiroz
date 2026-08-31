@@ -7,17 +7,6 @@ use hiroz_codegen::python_msgspec_generator;
 fn main() -> Result<()> {
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
 
-    // .msg/.srv definitions live in hiroz-codegen/assets/, outside this crate,
-    // so cargo won't rerun codegen on edits there unless we track them explicitly.
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
-    if let Some(codegen_assets) = manifest_dir
-        .parent()
-        .map(|p| p.join("hiroz-codegen/assets"))
-        && codegen_assets.exists()
-    {
-        println!("cargo:rerun-if-changed={}", codegen_assets.display());
-    }
-
     // Declare custom cfg for ROS version detection
     println!("cargo:rustc-check-cfg=cfg(ros_humble)");
 
@@ -39,6 +28,22 @@ fn main() -> Result<()> {
 
     // Detect ROS version and emit cfg
     let is_humble = detect_ros_version();
+
+    // hiroz-codegen stores the message assets in its own published crate.
+    // They are not in a sibling path inside this crate's directory. Use
+    // hiroz_codegen::bundled_assets_dir to find them. This finds them
+    // correctly whether hiroz-codegen comes from a workspace path or
+    // from crates.io.
+    //
+    // Always select the jazzy assets here. Do not pass `is_humble`.
+    // hiroz-codegen ships only the jazzy assets. The assets/humble
+    // directory exists but is empty. The package list below already
+    // excludes interfaces added after Humble. So the jazzy assets are
+    // correct for a Humble build too.
+    let codegen_assets = hiroz_codegen::bundled_assets_dir(false);
+    if codegen_assets.exists() {
+        println!("cargo:rerun-if-changed={}", codegen_assets.display());
+    }
 
     // Discover ROS packages
     let ros_packages = discover_ros_packages(is_humble)?;
@@ -171,7 +176,7 @@ fn discover_ros_packages(is_humble: bool) -> Result<Vec<PathBuf>> {
     // This ensures our bundled message definitions are always used consistently,
     // avoiding issues with system packages that may have different versions or
     // hardcoded paths from Nix wrapProgram.
-    println!("cargo:info=Checking local bundled assets from hiroz-codegen/assets/jazzy");
+    println!("cargo:info=Checking local bundled assets from hiroz-codegen's bundled assets");
     let local_asset_packages = discover_local_assets(&all_packages)?;
     let local_count = local_asset_packages.len();
     for pkg_path in local_asset_packages {
@@ -229,7 +234,9 @@ fn discover_ros_packages(is_humble: bool) -> Result<Vec<PathBuf>> {
 
     if !still_missing.is_empty() {
         println!("cargo:warning=Missing packages: {:?}", still_missing);
-        println!("cargo:warning=Consider installing ROS 2 or checking hiroz-codegen/assets/jazzy");
+        println!(
+            "cargo:warning=Consider installing ROS 2 or checking hiroz-codegen's bundled assets"
+        );
     }
 
     Ok(package_map.into_values().collect())
@@ -241,7 +248,8 @@ fn discover_package_name_from_path(package_path: &std::path::Path) -> Result<Str
 }
 
 /// Get list of all package names based on enabled features
-/// All packages are now bundled in hiroz-codegen/assets/jazzy
+/// All packages are bundled inside hiroz-codegen's own crate (see
+/// `hiroz_codegen::bundled_assets_dir`)
 fn get_all_packages(is_humble: bool) -> Vec<&'static str> {
     let mut names = vec![
         "builtin_interfaces",     // Always required
@@ -417,16 +425,22 @@ fn discover_system_packages(packages: &[&str]) -> Result<Vec<PathBuf>> {
     Ok(found_packages)
 }
 
-/// Discover packages from local bundled assets (hiroz-codegen/assets/jazzy/)
+/// Discover packages from hiroz-codegen's bundled assets directory.
+///
+/// Only returns the subset named in `package_names` (i.e. whatever the enabled
+/// Cargo features requested), not every package hiroz-codegen bundles.
 fn discover_local_assets(package_names: &[&str]) -> Result<Vec<PathBuf>> {
     let mut found_packages = Vec::new();
 
-    // Get the path to hiroz-codegen/assets/jazzy relative to this crate
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let assets_dir = manifest_dir
-        .parent()
-        .expect("Failed to get parent directory")
-        .join("hiroz-codegen/assets/jazzy");
+    // Resolve this through hiroz-codegen's own API, not a sibling-directory
+    // path. This works whether hiroz-codegen is a workspace path
+    // dependency or comes from crates.io, because it resolves against
+    // hiroz-codegen's own CARGO_MANIFEST_DIR.
+    //
+    // Always select jazzy here. Do not pass `is_humble`. hiroz-codegen
+    // ships only the jazzy assets. See the call site in `main` for the
+    // full reason.
+    let assets_dir = hiroz_codegen::bundled_assets_dir(false);
 
     if !assets_dir.exists() {
         println!(
@@ -436,7 +450,7 @@ fn discover_local_assets(package_names: &[&str]) -> Result<Vec<PathBuf>> {
         return Ok(Vec::new());
     }
 
-    // Search for packages in jazzy assets directory
+    // Search for the requested packages in the bundled assets directory
     for package_name in package_names {
         let package_path = assets_dir.join(package_name);
 
