@@ -44,6 +44,7 @@ pub(crate) struct ParameterServiceConfig<'a> {
     pub keyexpr_format: hiroz_protocol::KeyExprFormat,
     pub node_name: &'a str,
     pub namespace: &'a str,
+    pub enclave: &'a str,
     pub node_id: usize,
     pub counter: &'a GlobalCounter,
     pub clock: &'a crate::time::ZClock,
@@ -290,6 +291,7 @@ impl ParameterService {
             keyexpr_format,
             node_name,
             namespace,
+            enclave,
             node_id,
             counter,
             clock,
@@ -306,7 +308,7 @@ impl ParameterService {
             node_id,
             node_name.to_string(),
             namespace.to_string(),
-            String::new(),
+            enclave.to_string(),
         );
 
         // Compute node fully-qualified name for parameter events
@@ -483,7 +485,7 @@ impl ParameterService {
                 entity,
                 session: session.clone(),
                 clock: clock.clone(),
-                keyexpr_format,
+                keyexpr_format: keyexpr_format.clone(),
                 _phantom_data: Default::default(),
             };
             builder.build_with_callback(move |query| {

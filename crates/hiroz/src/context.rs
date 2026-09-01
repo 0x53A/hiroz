@@ -71,9 +71,8 @@ impl RemapRules {
     }
 }
 
-#[derive(Default)]
 pub struct ZContextBuilder {
-    domain_id: usize,
+    domain_id: DomainId,
     namespace: String,
     enclave: String,
     zenoh_config: Option<zenoh::Config>,
@@ -87,10 +86,85 @@ pub struct ZContextBuilder {
     clock: Option<ZClock>,
 }
 
+/// The builder's resolved (or pending) ROS domain id.
+///
+/// `Invalid` only exists between `ZContextBuilder::default()` and
+/// `.build()`/`.with_domain_id()` -- a live `ZContext` always carries a
+/// concrete `usize`. Modeling "haven't resolved an invalid ROS_DOMAIN_ID
+/// yet" as a variant, rather than a `usize` plus a side-channel error
+/// field, makes it a state the type carries instead of an invariant call
+/// sites have to remember to check (and that `with_domain_id()` has to
+/// remember to clear).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DomainId {
+    /// A concrete domain, either explicit or read from `ROS_DOMAIN_ID`.
+    Value(usize),
+    /// `ROS_DOMAIN_ID` was set but is not a valid non-negative integer.
+    /// `build()` rejects this unless `.with_domain_id()` overrides it
+    /// first. Falling back to domain 0 silently would put a node on the
+    /// wrong ROS graph after an operator typo; `rcl_get_default_domain_id`
+    /// treats this the same way, returning an error that aborts
+    /// `rcl_init` rather than defaulting.
+    Invalid(String),
+}
+
+impl DomainId {
+    /// Matches `rclcpp`/`rclpy`: read `ROS_DOMAIN_ID` from the environment,
+    /// so the normal ROS 2 deployment story (set the env var, don't touch
+    /// source) works here too. `.with_domain_id()` called after
+    /// `default()` still overrides this, same precedence as every other
+    /// ROS 2 client library.
+    fn from_env() -> Self {
+        Self::parse(std::env::var("ROS_DOMAIN_ID").ok())
+    }
+
+    /// Pure parsing, taking the env var's value directly rather than
+    /// reading it -- so this is unit-testable without mutating (and
+    /// racing on) real process-global state.
+    fn parse(value: Option<String>) -> Self {
+        match value {
+            Some(val) => match val.parse::<usize>() {
+                Ok(id) => Self::Value(id),
+                Err(_) => Self::Invalid(val),
+            },
+            None => Self::Value(0),
+        }
+    }
+}
+
+impl std::fmt::Display for DomainId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value(id) => write!(f, "{id}"),
+            Self::Invalid(raw) => write!(f, "<invalid ROS_DOMAIN_ID {raw:?}>"),
+        }
+    }
+}
+
+impl Default for ZContextBuilder {
+    fn default() -> Self {
+        Self {
+            domain_id: DomainId::from_env(),
+            namespace: String::default(),
+            enclave: String::default(),
+            zenoh_config: None,
+            config_file: None,
+            config_overrides: Vec::default(),
+            remap_rules: RemapRules::default(),
+            enable_logging: bool::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            shm_config: None,
+            keyexpr_format: hiroz_protocol::KeyExprFormat::default(),
+            clock: None,
+        }
+    }
+}
+
 impl ZContextBuilder {
-    /// Set the ROS domain ID
+    /// Set the ROS domain ID, overriding `ROS_DOMAIN_ID` (and any error
+    /// parsing it) with an explicit value.
     pub fn with_domain_id(mut self, domain_id: usize) -> Self {
-        self.domain_id = domain_id;
+        self.domain_id = DomainId::Value(domain_id);
         self
     }
 
@@ -468,11 +542,29 @@ impl ZContextBuilder {
     ///
     /// Unlike `build()`, this method:
     /// - Uses `zenoh::open(config).await` instead of `.wait()`
-    /// - Skips environment variable lookups (not available in browsers)
+    /// - Reads no config file from disk (there is no filesystem in a browser)
     /// - Requires a zenoh config to be provided via `with_zenoh_config()`
+    ///
+    /// `ROS_DOMAIN_ID` is still honoured, because `Default::default()`
+    /// resolves it before we get here. In a browser the variable is simply
+    /// never present, so that resolves to domain 0 and callers are expected
+    /// to pass `.with_domain_id()` explicitly.
     pub async fn build_async(self) -> zenoh::Result<ZContext> {
         let enclave = self.enclave.clone();
-        let domain_id = self.domain_id;
+        // Mirror `build()`: an unparseable ROS_DOMAIN_ID is an error, not a
+        // silent fall back to domain 0, which would put the node on the
+        // wrong ROS graph.
+        let domain_id = match &self.domain_id {
+            DomainId::Value(id) => *id,
+            invalid => {
+                return Err(format!(
+                    "{invalid}: not a valid non-negative integer; set \
+                     ROS_DOMAIN_ID to a valid domain or call \
+                     .with_domain_id() explicitly"
+                )
+                .into());
+            }
+        };
 
         let mut config = self
             .zenoh_config
@@ -522,6 +614,15 @@ impl Builder for ZContextBuilder {
         // 3. ZENOH_SESSION_CONFIG_URI environment variable (same as rmw_zenoh_cpp)
         // 4. **NEW DEFAULT**: ROS session config (connects to router at tcp/localhost:7447)
         //    This matches rmw_zenoh_cpp behavior
+
+        let DomainId::Value(_) = &self.domain_id else {
+            return Err(format!(
+                "{}: not a valid non-negative integer; set ROS_DOMAIN_ID to a \
+                 valid domain or call .with_domain_id() explicitly",
+                self.domain_id
+            )
+            .into());
+        };
 
         debug!(
             "[CTX] Building context: domain_id={}, has_config={}",
@@ -598,7 +699,9 @@ impl Builder for ZContextBuilder {
             }
         }
 
-        let domain_id = builder.domain_id;
+        let DomainId::Value(domain_id) = builder.domain_id else {
+            unreachable!("build() already rejected a non-Value domain_id above")
+        };
         let graph = Arc::new(Graph::new(
             &session,
             domain_id,
@@ -716,6 +819,13 @@ impl ZContext {
     /// Get a reference to the graph for setting up event callbacks
     pub fn graph(&self) -> &Arc<crate::graph::Graph> {
         &self.graph
+    }
+
+    /// The resolved ROS domain id this context was built with -- either
+    /// explicit via `.with_domain_id()`, from `ROS_DOMAIN_ID`, or the
+    /// default of 0.
+    pub fn domain_id(&self) -> usize {
+        self.domain_id
     }
 
     /// Access the context clock used by nodes and runtime helpers.

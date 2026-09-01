@@ -21,8 +21,14 @@ use hiroz_protocol::{
     entity::{LivelinessKE, TopicKE},
     qos::QosProfile,
 };
-use zenoh::{Wait, config::WhatAmI};
 
+mod common;
+use common::TestRouter;
+
+/// A pass-through `KeyExprFormatter` that delegates to `RmwZenohFormatter` for
+/// everything except its own admin space, so a node using it is
+/// distinguishable on the wire from a plain rmw_zenoh node without
+/// reimplementing any encoding.
 #[derive(Debug)]
 struct TestKeyExprFormatter;
 
@@ -72,35 +78,6 @@ impl KeyExprFormatter for TestKeyExprFormatter {
 
     fn decode_qos(encoded: &str) -> hiroz::Result<(bool, QosProfile)> {
         RmwZenohFormatter::decode_qos(encoded)
-    }
-}
-
-struct DomainTestRouter {
-    endpoint: String,
-    _session: zenoh::Session,
-}
-
-impl DomainTestRouter {
-    fn new() -> Self {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test port");
-        let port = listener.local_addr().expect("test address").port();
-        drop(listener);
-
-        let endpoint = format!("tcp/127.0.0.1:{port}");
-        let mut config = zenoh::Config::default();
-        config.set_mode(Some(WhatAmI::Router)).unwrap();
-        config
-            .insert_json5("listen/endpoints", &format!("[\"{endpoint}\"]"))
-            .unwrap();
-        config
-            .insert_json5("scouting/multicast/enabled", "false")
-            .unwrap();
-        let session = zenoh::open(config).wait().expect("open test router");
-
-        Self {
-            endpoint,
-            _session: session,
-        }
     }
 }
 
@@ -163,14 +140,25 @@ async fn wait_for_subscribers(
 mod tests {
     use super::*;
 
+    /// Built-in services (type description + the six parameter services) must
+    /// announce the node's actual domain, not a hardcoded domain 0.
+    ///
+    /// Does not assert `enclave`: `format/rmw_zenoh.rs`'s liveliness
+    /// encoder hardcodes the enclave segment to the empty placeholder for
+    /// every entity type (`// Enclave (not supported yet)` on the decode
+    /// side), so no entity's enclave round-trips today -- not the node's
+    /// own token, not a plain `ZNode`'s, not these. That is a separate,
+    /// pre-existing wire-format gap this PR does not touch. This test only
+    /// covers what production `ParameterService`/`TypeDescriptionService`
+    /// construction actually controls: domain_id.
     #[tokio::test(flavor = "multi_thread")]
     async fn built_in_services_inherit_context_domain() -> Result<()> {
         const DOMAIN_ID: usize = 123;
-        let router = DomainTestRouter::new();
+        let router = TestRouter::new();
         let observer_ctx = ZContextBuilder::default()
             .with_domain_id(DOMAIN_ID)
             .disable_multicast_scouting()
-            .with_connect_endpoints([router.endpoint.as_str()])
+            .with_connect_endpoints([router.endpoint()])
             .with_mode("client")
             .build()?;
         let observer = observer_ctx
@@ -180,7 +168,7 @@ mod tests {
         let producer_ctx = ZContextBuilder::default()
             .with_domain_id(DOMAIN_ID)
             .disable_multicast_scouting()
-            .with_connect_endpoints([router.endpoint.as_str()])
+            .with_connect_endpoints([router.endpoint()])
             .with_mode("client")
             .build()?;
         let _producer = producer_ctx
@@ -226,16 +214,22 @@ mod tests {
         Ok(())
     }
 
+    /// Built-in services must also inherit the context's `keyexpr_format`,
+    /// not the default rmw_zenoh format -- the other half of what
+    /// `ParameterServiceConfig`/`TypeDescriptionService::new_with_node`
+    /// thread through alongside `domain_id`. Uses a pass-through custom
+    /// formatter with its own admin space, so a node's built-in services are
+    /// only discoverable at all if they actually used it.
     #[tokio::test(flavor = "multi_thread")]
     async fn built_in_services_inherit_custom_keyexpr_format() -> Result<()> {
-        let router = DomainTestRouter::new();
+        let router = TestRouter::new();
         let format = KeyExprFormat::Custom(Arc::new(
             KeyExprFormatterAdapter::<TestKeyExprFormatter>::new(),
         ));
         let observer_ctx = ZContextBuilder::default()
             .keyexpr_format(format.clone())
             .disable_multicast_scouting()
-            .with_connect_endpoints([router.endpoint.as_str()])
+            .with_connect_endpoints([router.endpoint()])
             .with_mode("client")
             .build()?;
         let observer = observer_ctx
@@ -245,7 +239,7 @@ mod tests {
         let producer_ctx = ZContextBuilder::default()
             .keyexpr_format(format)
             .disable_multicast_scouting()
-            .with_connect_endpoints([router.endpoint.as_str()])
+            .with_connect_endpoints([router.endpoint()])
             .with_mode("client")
             .build()?;
         let _producer = producer_ctx

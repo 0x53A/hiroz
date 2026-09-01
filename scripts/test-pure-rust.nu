@@ -46,6 +46,14 @@ def check-bundled-msgs [] {
     run-cmd "cargo check -p hiroz-msgs --no-default-features --features geometry_msgs"
     run-cmd "cargo check -p hiroz-msgs --no-default-features --features sensor_msgs"
     run-cmd "cargo check -p hiroz-msgs --no-default-features --features nav_msgs"
+    # This shell has no system ROS install. It has no AMENT_PREFIX_PATH.
+    # So detect_ros_version()'s system-install fallback cannot hide a
+    # broken bundled-assets path. Every ROS-container CI job hides this
+    # kind of bug, because it has a system ROS install. That gap let
+    # `hiroz_codegen::bundled_assets_dir(is_humble)` point at the empty
+    # `assets/humble` directory. Nobody noticed. See
+    # ZettaScaleLabs/hiroz#332 for the details.
+    run-cmd "cargo check -p hiroz-msgs --features humble"
 }
 
 def check-hu [] {
