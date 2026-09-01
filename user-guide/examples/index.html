@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.618322db.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -308,11 +308,11 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../tools/console/" class="md-tabs__link">
+        <a href="../../tools/why-hu/" class="md-tabs__link">
           
   
   
-  Tools
+  hu Toolkit
 
         </a>
       </li>
@@ -1577,7 +1577,7 @@
   <span class="md-ellipsis">
     
   
-    Tools
+    hu Toolkit
   
 
     
@@ -1593,7 +1593,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Tools
+    hu Toolkit
   
 
           </label>
@@ -1606,14 +1606,126 @@
   
   
     <li class="md-nav__item">
-      <a href="../../tools/console/" class="md-nav__link">
+      <a href="../../tools/why-hu/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    hiroz-console
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/hu/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    hu (Hiroz Union)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/hu-install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installing hu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/hu-vs-ros2cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    hu vs. ros2cli / rqt
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/hu-plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    hu Plugin Authoring
   
 
     
@@ -1925,6 +2037,34 @@
     
   
     Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../go_interop_tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interop Tests
   
 
     
@@ -2495,8 +2635,8 @@
 <h2 id="start-the-eclipse-zenoh-router">Start the Eclipse Zenoh Router<a class="headerlink" href="#start-the-eclipse-zenoh-router" title="Permanent link">&para;</a></h2>
 <p>All examples require a Zenoh router to be running first (see <a href="../networking/">Networking</a> for why hiroz uses router-based architecture by default).</p>
 <h2 id="from-the-hiroz-repository">From the hiroz Repository<a class="headerlink" href="#from-the-hiroz-repository" title="Permanent link">&para;</a></h2>
-<p>If you're working in the hiroz repository, use the included router example:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>cargo<span class="w"> </span>run<span class="w"> </span>--example<span class="w"> </span>zenoh_router
+<p>If you have the <code>hu</code> tool installed, start an embedded router with a single command:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>hu<span class="w"> </span>router
 </span></code></pre></div>
 <h2 id="from-your-own-project">From Your Own Project<a class="headerlink" href="#from-your-own-project" title="Permanent link">&para;</a></h2>
 <p>If you're working on your own project, you need to install a Zenoh router. Quick options:</p>
@@ -2574,13 +2714,11 @@
 <td>Remote <code>ParameterClient</code> calls against a parameter server</td>
 <td><code>cargo run --example z_parameter_client</code></td>
 </tr>
-<tr>
-<td><code>zenoh_router</code></td>
-<td>Embedded Zenoh router for development without installing <code>zenohd</code></td>
-<td><code>cargo run --example zenoh_router</code></td>
-</tr>
 </tbody>
 </table>
+<p>The CDR <strong>publishing</strong> examples build their nodes with <code>.with_type_description_service()</code>, so runtime-typed tools such as <code>hu meter echo</code> can fetch the schema and decode their traffic. That call is opt-in on a hiroz node — copy it into your own nodes if you want them to be introspectable the same way. ROS 2 differs here: <code>rclcpp</code> and <code>rclpy</code> start that service by default, so a C++ or Python node is introspectable without asking.</p>
+<p>The <strong>service</strong> examples do not opt in. <code>z_srvcli</code> and <code>demo_nodes/add_two_ints_server</code> build plain nodes, so <code>hu meter service call</code> cannot resolve their request type and fails rather than decoding it. Add <code>.with_type_description_service()</code> to the server's node if you want to drive it from <code>hu</code>.</p>
+<p>The <code>protobuf_interop</code> and <code>encoding_demo</code> examples deliberately leave it off: they publish protobuf-encoded payloads, and advertising a CDR schema for those would invite a consumer to decode them as CDR and print plausible but wrong values.</p>
 <div class="admonition tip">
 <p class="admonition-title">Tip</p>
 <p>For a detailed walkthrough of creating your own project with hiroz (not using the repository examples), see the <a href="../../getting-started/quick-start/#option-2-create-your-own-project">Quick Start</a> guide.</p>
@@ -2945,10 +3083,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.top", "navigation.footer", "content.code.copy", "content.code.annotate", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.top", "navigation.footer", "content.code.copy", "content.code.annotate", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
         <script src="../../javascripts/mermaid.js"></script>
       
