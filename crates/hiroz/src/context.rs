@@ -3,10 +3,9 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
+pub use hiroz_protocol::KeyExprFormat;
 use tracing::{debug, warn};
 use zenoh::{Result, Session, Wait};
-
-pub use hiroz_protocol::KeyExprFormat;
 
 use crate::{
     Builder,
@@ -600,6 +599,7 @@ impl ZContextBuilder {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Builder for ZContextBuilder {
     type Output = ZContext;
 
@@ -812,8 +812,14 @@ impl ZContext {
     ///
     /// After calling `shutdown`, all nodes, publishers, subscribers, and
     /// service clients/servers created from this context become invalid.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn shutdown(&self) -> Result<()> {
         self.session.close().wait()
+    }
+
+    /// Close the underlying session without blocking a browser event-loop thread.
+    pub async fn shutdown_async(&self) -> Result<()> {
+        self.session.close().await
     }
 
     /// Get a reference to the graph for setting up event callbacks

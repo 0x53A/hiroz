@@ -1,27 +1,28 @@
-use crate::compat::Mutex;
-use serde::Serialize;
-use slab::Slab;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Condvar, Mutex as StdMutex, Weak},
     time::{Duration, SystemTime},
 };
-use tokio::sync::Notify;
-use tracing::debug;
 
+use serde::Serialize;
+use slab::Slab;
+use tokio::sync::Notify;
+use tracing::{self, debug};
 #[cfg(test)]
-use crate::entity::ADMIN_SPACE;
-use crate::entity::{
-    ACTION_SERVER_SERVICE_SUFFIXES, ACTION_SERVER_TOPIC_SUFFIXES, EndpointEntity, EndpointKind,
-    Entity, LivelinessKE, NodeKey, Topic, action_name_from_topic,
-};
-use crate::event::GraphEventManager;
-use crate::time::system_time_now;
-use tracing;
+use zenoh::key_expr::KeyExpr;
 use zenoh::{Result, Session, Wait, pubsub::Subscriber, sample::SampleKind, session::ZenohId};
 
 #[cfg(test)]
-use zenoh::key_expr::KeyExpr;
+use crate::entity::ADMIN_SPACE;
+use crate::{
+    compat::Mutex,
+    entity::{
+        ACTION_SERVER_SERVICE_SUFFIXES, ACTION_SERVER_TOPIC_SUFFIXES, EndpointEntity, EndpointKind,
+        Entity, LivelinessKE, NodeKey, Topic, action_name_from_topic,
+    },
+    event::GraphEventManager,
+    time::system_time_now,
+};
 
 /// A serializable snapshot of the ROS graph state
 #[derive(Debug, Clone, Serialize)]
@@ -468,7 +469,7 @@ impl Graph {
     where
         F: Fn(&Self) -> bool,
     {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = crate::compat::Instant::now() + timeout;
         loop {
             let notified = self.change_notify.notified();
             tokio::pin!(notified);
@@ -477,12 +478,12 @@ impl Graph {
                 return true;
             }
 
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining = deadline.saturating_duration_since(crate::compat::Instant::now());
             if remaining.is_zero() {
                 return false;
             }
 
-            if tokio::time::timeout(remaining, &mut notified)
+            if crate::compat::timeout(remaining, &mut notified)
                 .await
                 .is_err()
             {
@@ -524,7 +525,7 @@ impl Graph {
         quiet: Duration,
         timeout: Duration,
     ) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = crate::compat::Instant::now() + timeout;
         // Phase 1: block until at least one external entity appears.
         loop {
             let notified = self.change_notify.notified();
@@ -532,11 +533,11 @@ impl Graph {
             if self.has_external_entity(exclude) {
                 break;
             }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining = deadline.saturating_duration_since(crate::compat::Instant::now());
             if remaining.is_zero() {
                 return false;
             }
-            if tokio::time::timeout(remaining, &mut notified)
+            if crate::compat::timeout(remaining, &mut notified)
                 .await
                 .is_err()
             {
@@ -549,12 +550,12 @@ impl Graph {
         loop {
             let notified = self.change_notify.notified();
             tokio::pin!(notified);
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining = deadline.saturating_duration_since(crate::compat::Instant::now());
             if remaining.is_zero() {
                 return true;
             }
             let quiet_window = quiet.min(remaining);
-            if tokio::time::timeout(quiet_window, &mut notified)
+            if crate::compat::timeout(quiet_window, &mut notified)
                 .await
                 .is_err()
             {

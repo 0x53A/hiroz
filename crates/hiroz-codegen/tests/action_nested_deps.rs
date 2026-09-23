@@ -60,6 +60,18 @@ fn test_lookup_transform_hashes_include_nested_deps() {
         .find(|a| a.parsed.name == "LookupTransform")
         .expect("LookupTransform action");
 
+    assert_eq!(
+        lookup_transform.cancel_goal_hash.to_rihs_string(),
+        "RIHS01_573d8b0a534451d7bc2ac8c5ffde8ac14b8593b7001175d0cd6516dcbeb8689a",
+        "CancelGoal must match the installed ROS action_msgs service hash"
+    );
+
+    let generated = hiroz_codegen::generator::rust::generate_action_impl(lookup_transform)
+        .unwrap()
+        .to_string();
+    assert!(generated.contains("fn default_result"));
+    assert!(generated.contains("Some (Default :: default ())"));
+
     // Pinned after fixing calculate_get_result_hash to call
     // collect_nested_deps on the Result type, matching the plain-service
     // path (resolver.rs:181-182). Before that fix this hash is computed

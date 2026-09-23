@@ -6,7 +6,8 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use dashmap::DashMap;
+use std::collections::HashMap;
+use crate::compat::Mutex;
 use tokio::sync::{mpsc, watch};
 use zenoh::Result;
 
@@ -202,7 +203,7 @@ impl<'a, A: ZAction> Builder for ZActionClientBuilder<'a, A> {
         let cancel_client = cancel_client_builder.build()?;
 
         let goal_board = Arc::new(GoalBoard {
-            active_goals: DashMap::new(),
+            active_goals: Mutex::new(HashMap::new()),
         });
 
         // Create feedback subscriber with callback for proper graph registration
@@ -224,11 +225,14 @@ impl<'a, A: ZAction> Builder for ZActionClientBuilder<'a, A> {
         let feedback_sub =
             feedback_sub_builder.build_with_callback(move |msg: FeedbackMessage<A>| {
                 tracing::trace!("Feedback callback received for goal {:?}", msg.goal_id);
-                if let Some(channels) = goal_board_feedback.active_goals.get(&msg.goal_id) {
+                if let Some(channels) = goal_board_feedback.active_goals.lock().get(&msg.goal_id) {
                     tracing::trace!("Routing feedback to goal {:?}", msg.goal_id);
                     let _ = channels.feedback_tx.send(msg.feedback);
                 } else {
-                    tracing::warn!("No active goal found for feedback {:?}", msg.goal_id);
+                    // The action feedback topic is shared by every client. Goals
+                    // owned by another client (or already dropped locally) are
+                    // expected here, just like unmatched status updates below.
+                    tracing::trace!("No active goal found for feedback {:?}", msg.goal_id);
                 }
             })?;
         tracing::debug!("Feedback subscriber created successfully");
@@ -239,9 +243,12 @@ impl<'a, A: ZAction> Builder for ZActionClientBuilder<'a, A> {
         let mut status_sub_builder = self
             .node
             .create_sub_impl::<StatusMessage>(&status_topic_name, status_type_info);
-        if let Some(qos) = self.status_topic_qos {
-            status_sub_builder.entity.qos = qos.to_protocol_qos();
-        }
+        let status_qos = self.status_topic_qos.unwrap_or(crate::qos::QosProfile {
+            durability: crate::qos::QosDurability::TransientLocal,
+            history: crate::qos::QosHistory::KeepLast(std::num::NonZeroUsize::new(1).unwrap()),
+            ..Default::default()
+        });
+        status_sub_builder.entity.qos = status_qos.to_protocol_qos();
         let goal_board_status = goal_board.clone();
         let status_sub = status_sub_builder.build_with_callback(move |msg: StatusMessage| {
             tracing::trace!(
@@ -251,6 +258,7 @@ impl<'a, A: ZAction> Builder for ZActionClientBuilder<'a, A> {
             for status_info in msg.status_list {
                 if let Some(channels) = goal_board_status
                     .active_goals
+            .lock()
                     .get(&status_info.goal_info.goal_id)
                 {
                     tracing::trace!(
@@ -412,7 +420,7 @@ impl<A: ZAction> ZActionClient<A> {
         let (status_tx, status_rx) = watch::channel(GoalStatus::Unknown);
 
         // 2. Insert into board (Lock-Free)
-        self.goal_board.active_goals.insert(
+        self.goal_board.active_goals.lock().insert(
             goal_id,
             GoalChannels {
                 feedback_tx,
@@ -420,13 +428,20 @@ impl<A: ZAction> ZActionClient<A> {
             },
         );
 
+        // Own registration before the first await so cancellation of send_goal
+        // removes the routing entry just like dropping a returned handle does.
+        let registration = GoalRegistration {
+            id: goal_id,
+            board: self.goal_board.clone(),
+        };
+
         // 3. Send goal request via service client
         let request = SendGoalRequest { goal_id, goal };
         tracing::debug!("Sending goal request for goal_id: {:?}", goal_id);
         let response = match self.goal_client.call(&request).await {
             Ok(response) => response,
             Err(error) => {
-                self.goal_board.active_goals.remove(&goal_id);
+                self.goal_board.active_goals.lock().remove(&goal_id);
                 return Err(error);
             }
         };
@@ -434,8 +449,8 @@ impl<A: ZAction> ZActionClient<A> {
         // 5. Check if accepted
         if !response.accepted {
             // Cleanup on rejection
-            self.goal_board.active_goals.remove(&goal_id);
-            return Err(zenoh::Error::from("Goal rejected".to_string()));
+            self.goal_board.active_goals.lock().remove(&goal_id);
+            return Err(Box::new(crate::error::Error::GoalRejected));
         }
 
         // 6. Seed status watch with Accepted.
@@ -446,7 +461,7 @@ impl<A: ZAction> ZActionClient<A> {
         // regardless of pub/sub delivery timing.  Use send_if_modified so a
         // concurrent status delivery that already advanced beyond Accepted
         // (unlikely but possible) is not overwritten.
-        if let Some(channels) = self.goal_board.active_goals.get(&goal_id) {
+        if let Some(channels) = self.goal_board.active_goals.lock().get(&goal_id) {
             channels.status_tx.send_if_modified(|s| {
                 if *s == GoalStatus::Unknown {
                     *s = GoalStatus::Accepted;
@@ -463,34 +478,33 @@ impl<A: ZAction> ZActionClient<A> {
             client: Arc::new(self.clone()),
             feedback_rx: Some(feedback_rx),
             status_rx: Some(status_rx),
+            _registration: registration,
             _state: PhantomData,
         })
     }
 
-    pub async fn cancel_goal(&self, goal_id: GoalId) -> Result<CancelGoalServiceResponse> {
-        let goal_info = GoalInfo::new(goal_id);
-        let request = CancelGoalServiceRequest { goal_info };
-
+    /// Request cancellation using the four ROS selectors: zero ID/time selects
+    /// all goals; ID alone selects that goal; time alone selects goals accepted
+    /// at or before it; both select their union.
+    pub async fn cancel_goals(&self, goal_id: GoalId, stamp: Time) -> Result<CancelGoalServiceResponse> {
+        let request = CancelGoalServiceRequest { goal_info: GoalInfo { goal_id, stamp } };
         self.cancel_client.call(&request).await
     }
 
-    pub async fn cancel_all_goals(&self) -> Result<CancelGoalServiceResponse> {
-        // NOTE: ROS 2 convention: zero UUID + zero timestamp means "cancel all"
-        let zero_goal_id = GoalId([0u8; 16]);
-        let goal_info = GoalInfo {
-            goal_id: zero_goal_id,
-            stamp: Time::zero(),
-        };
-        let request = CancelGoalServiceRequest { goal_info };
+    pub async fn cancel_goal(&self, goal_id: GoalId) -> Result<CancelGoalServiceResponse> {
+        self.cancel_goals(goal_id, Time::zero()).await
+    }
 
-        self.cancel_client.call(&request).await
+    pub async fn cancel_all_goals(&self) -> Result<CancelGoalServiceResponse> {
+        self.cancel_goals(GoalId::from_bytes([0; 16]), Time::zero()).await
     }
 
     pub fn feedback_stream(&self, goal_id: GoalId) -> Option<mpsc::UnboundedReceiver<A::Feedback>> {
         self.goal_board
             .active_goals
+            .lock()
             .get_mut(&goal_id)
-            .map(|mut channels| {
+            .map(|channels| {
                 // Create new receiver (old one already taken via GoalHandle)
                 let (tx, rx) = mpsc::unbounded_channel();
                 channels.feedback_tx = tx;
@@ -501,24 +515,47 @@ impl<A: ZAction> ZActionClient<A> {
     pub fn status_watch(&self, goal_id: GoalId) -> Option<watch::Receiver<GoalStatus>> {
         self.goal_board
             .active_goals
+            .lock()
             .get(&goal_id)
             .map(|channels| channels.status_tx.subscribe())
     }
 
     pub async fn get_result(&self, goal_id: GoalId) -> Result<A::Result> {
+        let (status, result) = self.get_result_with_status(goal_id).await?;
+        if status == GoalStatus::Unknown {
+            return Err(zenoh::Error::from("Goal result is unknown or expired"));
+        }
+        Ok(result)
+    }
+
+    /// Fetches the terminal status together with the action result.
+    ///
+    /// Unlike `get_result`, this preserves whether execution succeeded, was
+    /// canceled, or aborted. An unknown or expired goal has status `Unknown`.
+    pub async fn get_result_with_status(&self, goal_id: GoalId) -> Result<(GoalStatus, A::Result)> {
         let request = GetResultRequest { goal_id };
-
         let response: GetResultResponse<A> = self.result_client.call(&request).await?;
-
-        Ok(response.result)
+        let status = GoalStatus::try_from(response.status).map_err(zenoh::Error::from)?;
+        Ok((status, response.result))
     }
 }
 
-/// The Goal Board (Lock-Free)
-///
-/// DashMap handles concurrent access safely and efficiently without blocking.
+/// Per-goal routing protected by short platform-compatible critical sections.
 struct GoalBoard<A: ZAction> {
-    active_goals: DashMap<GoalId, GoalChannels<A>>,
+    active_goals: Mutex<HashMap<GoalId, GoalChannels<A>>>,
+}
+
+// This guard follows ownership of a goal from its pending send through its
+// handle and result future. Cleanup therefore also runs if any future is dropped.
+struct GoalRegistration<A: ZAction> {
+    id: GoalId,
+    board: Arc<GoalBoard<A>>,
+}
+
+impl<A: ZAction> Drop for GoalRegistration<A> {
+    fn drop(&mut self) {
+        self.board.active_goals.lock().remove(&self.id);
+    }
 }
 
 struct GoalChannels<A: ZAction> {
@@ -561,6 +598,8 @@ pub struct GoalHandle<A: ZAction, State = goal_state::Active> {
     feedback_rx: Option<mpsc::UnboundedReceiver<A::Feedback>>,
     /// Receiver for status updates.
     status_rx: Option<watch::Receiver<GoalStatus>>,
+    /// Removes routing state when this handle or its result future is dropped.
+    _registration: GoalRegistration<A>,
     /// Type-state marker
     _state: PhantomData<State>,
 }
@@ -577,6 +616,10 @@ impl<A: ZAction> GoalHandle<A, goal_state::Active> {
     }
 
     /// Takes ownership of the feedback receiver.
+    ///
+    /// This per-goal queue is unbounded, independently of feedback-topic QoS.
+    /// Drain it while the goal is active, or drop the receiver if feedback is
+    /// unwanted. Keeping a live receiver unread can retain every feedback sample.
     ///
     /// Returns `Some` the first time it's called, `None` afterwards.
     pub fn feedback(&mut self) -> Option<mpsc::UnboundedReceiver<A::Feedback>> {
@@ -621,9 +664,14 @@ impl<A: ZAction> GoalHandle<A, goal_state::Active> {
         let res = self.client.get_result(self.id).await;
 
         // Cleanup Board (Crucial for Memory Safety)
-        self.client.goal_board.active_goals.remove(&self.id);
+        self.client.goal_board.active_goals.lock().remove(&self.id);
 
         res
+    }
+
+    /// Consumes the handle and returns both terminal status and result.
+    pub async fn result_with_status(self) -> Result<(GoalStatus, A::Result)> {
+        self.client.get_result_with_status(self.id).await
     }
 
     /// Consumes the Active handle and waits for the result, failing if it does
@@ -641,13 +689,13 @@ impl<A: ZAction> GoalHandle<A, goal_state::Active> {
     ///
     /// The result of the action once it completes, or a timeout error.
     pub async fn result_with_timeout(self, timeout: std::time::Duration) -> Result<A::Result> {
-        let res = match tokio::time::timeout(timeout, self.client.get_result(self.id)).await {
+        let res = match crate::compat::timeout(timeout, self.client.get_result(self.id)).await {
             Ok(res) => res,
             Err(_) => Err(crate::error::Error::timeout(timeout)),
         };
 
         // Cleanup Board (Crucial for Memory Safety)
-        self.client.goal_board.active_goals.remove(&self.id);
+        self.client.goal_board.active_goals.lock().remove(&self.id);
 
         res
     }

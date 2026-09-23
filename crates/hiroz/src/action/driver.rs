@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::{task::JoinSet, time};
+use crate::compat::JoinSet;
 use crate::compat::CancellationToken;
 use zenoh::Wait;
 
@@ -21,7 +21,7 @@ use super::{
     server::{Executing, GoalHandle, InnerServer, Requested, ZActionServer},
     state::ServerGoalState,
 };
-use crate::{attachment::Attachment, msg::ZMessage};
+use crate::msg::ZMessage;
 
 /// Runs the unified driver loop for an action server with automatic goal handling.
 ///
@@ -53,8 +53,7 @@ pub(crate) async fn run_driver_loop<A, F, Fut>(
     let handler = Arc::new(handler);
 
     // Create a timer for periodic expiration checking (every 1 second)
-    let mut expiration_timer = time::interval(Duration::from_secs(1));
-    expiration_timer.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    let mut expiration_timer = Box::pin(crate::compat::sleep(Duration::from_secs(1)));
 
     // STRUCTURED CONCURRENCY: Track all spawned goal tasks here
     let mut goal_tasks = JoinSet::new();
@@ -73,16 +72,13 @@ pub(crate) async fn run_driver_loop<A, F, Fut>(
             // This line is crucial. It removes finished tasks from memory.
             Some(res) = goal_tasks.join_next() => {
                 if let Err(e) = res {
-                    if e.is_cancelled() {
-                        tracing::debug!("Goal task was cancelled");
-                    } else if e.is_panic() {
-                        tracing::error!("Goal task panicked!");
-                    }
+                    tracing::debug!("Action task ended: {e}");
                 }
             }
 
             // 3. Goal Expiration Timer
-            _ = expiration_timer.tick() => {
+            _ = &mut expiration_timer => {
+                expiration_timer = Box::pin(crate::compat::sleep(Duration::from_secs(1)));
                 // Check for expired goals and clean them up
                 let server = ZActionServer::from_inner(Arc::clone(&inner));
                 let expired_goals = server.expire_goals();
@@ -105,13 +101,10 @@ pub(crate) async fn run_driver_loop<A, F, Fut>(
 
             // 5. Cancel Requests
             query = inner.cancel_server.queue().recv_async() => {
-                handle_cancel_request(&inner, query).await;
+                handle_cancel_request(&inner, query);
             }
 
-            // 6. Result Requests
-            query = inner.result_server.queue().recv_async() => {
-                handle_result_request(&inner, query).await;
-            }
+
         }
     }
 
@@ -131,7 +124,9 @@ async fn handle_goal_request<A, F, Fut>(
     Fut: Future<Output = ()> + Send + 'static,
 {
     tracing::debug!("Received goal request");
-    let payload = query.payload().unwrap().to_bytes();
+    if super::request_attachment(&query).is_err() { return; }
+    let Some(payload) = query.payload() else { return };
+    let payload = payload.to_bytes();
     let request = match <GoalRequest<A> as ZMessage>::deserialize(&payload) {
         Ok(r) => r,
         Err(e) => {
@@ -150,74 +145,82 @@ async fn handle_goal_request<A, F, Fut>(
         server,
         query: Some(query),
         cancel_flag: None,
-        cancel_rx: None,
+        instance: None,
         _state: PhantomData::<Requested>,
     };
 
-    let accepted = requested.accept();
+    if inner.goal_manager.read(|manager| manager.goals.contains_key(&requested.info.goal_id)) {
+        let _ = requested.reject();
+        return;
+    }
+    let goal_id = requested.info.goal_id;
+    let Ok(accepted) = requested.try_accept() else { return };
+    let instance = accepted.instance.as_ref().expect("accepted goal has an identity").clone();
     let executing = accepted.execute();
 
     // Execute the user's handler
     // No tokio::select! needed anymore. If the driver loop aborts this task,
     // this await simply acts as a cancellation point.
-    handler(executing).await;
+    let duration = inner.goal_manager.read(|manager| manager.goal_timeout);
+    if let Some(duration) = duration {
+        let _ = crate::compat::timeout(duration, handler(executing)).await;
+        ZActionServer::from_inner(inner.clone()).abort_unfinished(goal_id, &instance);
+    } else {
+        handler(executing).await;
+        ZActionServer::from_inner(inner.clone()).abort_unfinished(goal_id, &instance);
+    }
 }
 
 /// Handles incoming cancel requests.
-async fn handle_cancel_request<A: ZAction>(
-    inner: &Arc<InnerServer<A>>,
-    query: zenoh::query::Query,
+pub(crate) fn handle_cancel_request<A: ZAction>(
+    inner: &Arc<InnerServer<A>>, query: zenoh::query::Query,
 ) {
-    tracing::debug!("Received cancel request");
-    let payload = query.payload().unwrap().to_bytes();
-    let request = match <CancelGoalServiceRequest as ZMessage>::deserialize(&payload) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("Failed to deserialize cancel request: {}", e);
-            return;
+    let Ok(attachment) = super::request_attachment(&query) else { return };
+    let Some(payload) = query.payload() else { return };
+    let Ok(request) = <CancelGoalServiceRequest as ZMessage>::deserialize(&payload.to_bytes()) else { return };
+    let response = inner.goal_manager.modify(|manager| {
+        let infos = inner.goal_info.lock();
+        let stamp = (request.goal_info.stamp.sec, request.goal_info.stamp.nanosec);
+        let by_id = request.goal_info.goal_id.is_valid();
+        let by_time = stamp != (0, 0);
+        let mut goals_canceling = Vec::new();
+        for (id, state) in &manager.goals {
+            let Some(info) = infos.get(id) else { continue };
+            if (!by_id && !by_time) || (by_id && *id == request.goal_info.goal_id)
+                || (by_time && (info.stamp.sec, info.stamp.nanosec) <= stamp) {
+                match state {
+                    ServerGoalState::Executing { cancel_flag, .. } => {
+                        cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                        goals_canceling.push(info.clone());
+                    },
+                    ServerGoalState::Accepted { .. } => {
+                        inner.cancel_pending.lock().insert(*id);
+                        goals_canceling.push(info.clone());
+                    },
+                    ServerGoalState::Canceling { .. } => goals_canceling.push(info.clone()),
+                    ServerGoalState::Terminated { .. } => {},
+                }
+            }
         }
-    };
-
-    // Mark goal as canceling using the atomic flag
-    let cancelled = inner.goal_manager.read(|manager| {
-        if let Some(ServerGoalState::Executing { cancel_flag, .. }) =
-            manager.goals.get(&request.goal_info.goal_id)
-        {
-            cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-            true
-        } else {
-            false
-        }
+        let return_code = if !goals_canceling.is_empty() || !by_id { 0 }
+            else if manager.goals.contains_key(&request.goal_info.goal_id) { 3 } else { 2 };
+        CancelGoalServiceResponse { return_code, goals_canceling }
     });
-
-    // Send response
-    let response = CancelGoalServiceResponse {
-        return_code: if cancelled { 0 } else { 1 },
-        goals_canceling: if cancelled {
-            vec![request.goal_info]
-        } else {
-            vec![]
-        },
-    };
-
-    let response_bytes = <CancelGoalServiceResponse as ZMessage>::serialize(&response);
-    let attachment: Attachment = query.attachment().unwrap().try_into().unwrap();
-    // FIXME: address the result
-    let _ = query
-        .reply(query.key_expr().clone(), response_bytes)
-        .attachment(attachment)
-        .wait();
-
-    tracing::debug!("Sent cancel response");
+    ZActionServer::from_inner(inner.clone()).publish_status();
+    let bytes = <CancelGoalServiceResponse as ZMessage>::serialize(&response);
+    let reply = query.reply(query.key_expr().clone(), bytes);
+    let _ = reply.attachment(attachment).wait();
 }
 
 /// Handles incoming result requests.
-async fn handle_result_request<A: ZAction>(
+pub(crate) async fn handle_result_request<A: ZAction>(
     inner: &Arc<InnerServer<A>>,
     query: zenoh::query::Query,
 ) {
     tracing::debug!("Received result request");
-    let payload = query.payload().unwrap().to_bytes();
+    let Ok(attachment) = super::request_attachment(&query) else { return };
+    let Some(payload) = query.payload() else { return };
+    let payload = payload.to_bytes();
     let request = match <GetResultRequest as ZMessage>::deserialize(&payload) {
         Ok(r) => r,
         Err(e) => {
@@ -277,13 +280,23 @@ async fn handle_result_request<A: ZAction>(
                 }
                 Err(_) => {
                     tracing::warn!("Result future cancelled for goal {:?}", request.goal_id);
-                    return; // Don't send response
+                    if let Some(result) = A::default_result() {
+                        (result, super::GoalStatus::Unknown)
+                    } else {
+                        let _ = query.reply_err("Goal result expired or server stopped").wait();
+                        return;
+                    }
                 }
             }
         }
         ResultState::NotFound => {
             tracing::warn!("Goal {:?} not found", request.goal_id);
-            return; // Don't send response
+            if let Some(result) = A::default_result() {
+                (result, super::GoalStatus::Unknown)
+            } else {
+                let _ = query.reply_err("Unknown goal").wait();
+                return;
+            }
         }
     };
 
@@ -293,7 +306,6 @@ async fn handle_result_request<A: ZAction>(
         result,
     };
     let response_bytes = <GetResultResponse<A> as ZMessage>::serialize(&response);
-    let attachment: Attachment = query.attachment().unwrap().try_into().unwrap();
     let _ = query
         .reply(query.key_expr().clone(), response_bytes)
         .attachment(attachment)

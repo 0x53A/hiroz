@@ -22,12 +22,13 @@
 //!
 //! | Suffix | Behaviour |
 //! |--------|-----------|
-//! | *(none)* | Blocking — safe to call from any context |
+//! | *(none)* | Blocking — requires a thread on which blocking is supported |
 //! | `_async` | Async — must be `.await`ed inside a Tokio (or compatible) runtime |
 //!
 //! For example, [`ZPub::publish`](pubsub::ZPub::publish) blocks until
 //! the put completes, while [`ZPub::async_publish`](pubsub::ZPub::async_publish)
-//! yields to the async executor.
+//! yields to the async executor. Browser event-loop threads must use async
+//! receive and context lifecycle APIs; they cannot park waiting for incoming data.
 //!
 //! ## Imports
 //!

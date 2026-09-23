@@ -734,32 +734,29 @@ impl Resolver {
             }],
         };
 
-        // CancelGoal_Response: return_code (int8)
         let response_desc = TypeDescription {
             type_name: "action_msgs/srv/CancelGoal_Response".to_string(),
-            fields: vec![FieldDescription {
-                name: "return_code".to_string(),
-                field_type: FieldTypeDescription {
-                    type_id: 2, // int8
-                    capacity: 0,
-                    string_capacity: 0,
-                    nested_type_name: String::new(),
+            fields: vec![
+                FieldDescription {
+                    name: "return_code".to_string(),
+                    field_type: FieldTypeDescription { type_id: 2, capacity: 0, string_capacity: 0, nested_type_name: String::new() },
+                    default_value: String::new(),
                 },
-                default_value: String::new(),
-            }],
+                FieldDescription {
+                    name: "goals_canceling".to_string(),
+                    field_type: FieldTypeDescription { type_id: 145, capacity: 0, string_capacity: 0, nested_type_name: "action_msgs/msg/GoalInfo".to_string() },
+                    default_value: String::new(),
+                },
+            ],
         };
 
         // Get dependencies
         let mut deps = BTreeMap::new();
 
-        // Get GoalInfo from resolved types
-        if let Some(goal_info_desc) = self.type_descriptions.get("action_msgs/GoalInfo") {
-            deps.insert(goal_info_desc.type_name.clone(), goal_info_desc.clone());
-        }
-
-        // Get Time (GoalInfo contains Time)
-        if let Some(time_desc) = self.type_descriptions.get("builtin_interfaces/Time") {
-            deps.insert(time_desc.type_name.clone(), time_desc.clone());
+        for name in ["action_msgs/GoalInfo", "builtin_interfaces/Time", "unique_identifier_msgs/UUID"] {
+            let description = self.type_descriptions.get(name)
+                .ok_or_else(|| anyhow::anyhow!("{} not found in type descriptions", name))?;
+            deps.insert(description.type_name.clone(), description.clone());
         }
 
         // Get ServiceEventInfo

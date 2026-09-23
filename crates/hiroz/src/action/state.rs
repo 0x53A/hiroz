@@ -3,10 +3,13 @@
 //! This module provides a `SafeGoalManager` that enforces synchronous-only
 //! access to goal state, preventing accidental lock-across-await bugs.
 
+use crate::compat::Instant;
+
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use crate::compat::Mutex;
+use std::time::Duration;
 
 use super::{GoalId, GoalStatus, ZAction};
 
@@ -48,7 +51,7 @@ impl<A: ZAction> SafeGoalManager<A> {
     where
         F: FnOnce(&mut GoalManagerInternal<A>) -> R,
     {
-        let mut guard = self.inner.lock().expect("Lock poisoned");
+        let mut guard = self.inner.lock();
         f(&mut guard)
     }
 
@@ -57,7 +60,7 @@ impl<A: ZAction> SafeGoalManager<A> {
     where
         F: FnOnce(&GoalManagerInternal<A>) -> R,
     {
-        let guard = self.inner.lock().expect("Lock poisoned");
+        let guard = self.inner.lock();
         f(&guard)
     }
 }

@@ -6,8 +6,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::compat::Mutex;
 use tokio::sync::Notify;
+
+use crate::compat::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClockKind {
@@ -260,9 +261,11 @@ impl ZClock {
             }
             #[cfg(target_arch = "wasm32")]
             ClockInner::System => {
-                // On WASM, use a simple future that resolves immediately
-                // (real timer support would need setTimeout integration)
-                ZSleep(Box::pin(async {}))
+                let duration = deadline
+                    .to_system_time()
+                    .duration_since(system_time_now())
+                    .unwrap_or(Duration::ZERO);
+                ZSleep(Box::pin(zenoh_runtime::wasm_yield::sleep(duration)))
             }
             ClockInner::Simulated(_) => {
                 let clock = self.clone();

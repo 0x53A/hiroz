@@ -1,9 +1,9 @@
-use crate::msg::ZMessage;
-use crate::time::system_time_now;
+use std::{fmt, time::SystemTime};
+
 use hiroz_cdr::{CdrBuffer, CdrDeserialize, CdrReader, CdrSerialize, CdrSerializedSize, CdrWriter};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::time::SystemTime;
+
+use crate::{msg::ZMessage, time::system_time_now};
 
 pub mod client;
 pub mod driver;
@@ -11,6 +11,20 @@ pub mod macros;
 pub mod messages;
 pub mod server;
 pub mod state;
+
+/// Validate ROS request correlation before accepting work or registering waiters.
+/// Regular services require the same metadata; rejected requests get an explicit
+/// query error instead of panicking a task or silently losing their response.
+pub(crate) fn request_attachment(query: &zenoh::query::Query) -> zenoh::Result<crate::attachment::Attachment> {
+    use zenoh::Wait;
+    let parsed = query.attachment()
+        .ok_or_else(|| zenoh::Error::from("Action request missing attachment"))
+        .and_then(crate::attachment::Attachment::try_from);
+    if let Err(error) = &parsed {
+        let _ = query.reply_err(format!("Invalid action request metadata: {error}")).wait();
+    }
+    parsed
+}
 
 // Re-export type-state markers for documentation and advanced usage
 pub use server::{Accepted, Executing, Requested};
@@ -38,6 +52,12 @@ pub trait ZAction: Send + Sync + 'static {
         + serde::Serialize
         + for<'de> serde::Deserialize<'de>;
     type Feedback: ZMessage + Clone + serde::Serialize + for<'de> serde::Deserialize<'de>;
+
+    /// Default payload for protocol responses with UNKNOWN status.
+    /// Generated ROS actions provide this automatically. Custom actions can
+    /// override it to support UNKNOWN responses; otherwise the server returns
+    /// an explicit service error when a goal is unknown or has expired.
+    fn default_result() -> Option<Self::Result> { None }
 
     fn name() -> &'static str;
 

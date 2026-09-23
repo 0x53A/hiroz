@@ -55,12 +55,14 @@ macro_rules! define_action {
         action_name: $action_name:expr,
         Goal: $goal_type:ty,
         Result: $result_type:ty,
-        Feedback: $feedback_type:ty $(,)?
+        Feedback: $feedback_type:ty $(, default_result: $default_result:expr)? $(,)?
     ) => {
         impl $crate::action::ZAction for $action_struct {
             type Goal = $goal_type;
             type Result = $result_type;
             type Feedback = $feedback_type;
+
+            $(fn default_result() -> Option<Self::Result> { Some($default_result) })?
 
             fn name() -> &'static str {
                 $action_name

@@ -1301,6 +1301,8 @@ pub fn generate_action_impl(action: &crate::types::ResolvedAction) -> Result<Tok
             type Result = super::#result_type;
             type Feedback = super::#feedback_type;
 
+            fn default_result() -> Option<Self::Result> { Some(Default::default()) }
+
             fn name() -> &'static str {
                 #action_type_name
             }

@@ -226,3 +226,93 @@ mod tests {
         Ok(())
     }
 }
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn test_explicit_goal_rejection_is_distinguishable() -> Result<()> {
+    let ctx = ZContextBuilder::default().build()?;
+    let node = ctx.create_node("rejected_goal_client").build()?;
+    let server = node.create_action_server::<TestAction>("rejected_goal").build()?;
+    let client = node.create_action_client::<TestAction>("rejected_goal").build()?;
+    let (response, rejection) = tokio::join!(
+        client.send_goal(TestGoal { order: 1 }),
+        async { server.recv_goal().await?.reject() },
+    );
+    rejection?;
+    let error = response.err().expect("server rejected the request");
+    assert!(matches!(error.downcast_ref::<hiroz::error::Error>(), Some(hiroz::error::Error::GoalRejected)));
+    assert!(!hiroz::error::is_timeout(&*error));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn test_foreign_goal_feedback_is_ignored_without_warning() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tracing::{span::{Attributes, Id, Record}, Event, Metadata, Subscriber};
+
+    // Capture the callback's logging synchronously during local publication.
+    // No global subscriber is installed, so other tests remain independent.
+    struct Capture { unmatched: Arc<AtomicUsize>, warnings: Arc<AtomicUsize> }
+    impl Subscriber for Capture {
+        fn enabled(&self, _: &Metadata<'_>) -> bool { true }
+        fn new_span(&self, _: &Attributes<'_>) -> Id { Id::from_u64(1) }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            struct Message(bool);
+            impl tracing::field::Visit for Message {
+                fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                    if field.name() == "message" && format!("{value:?}").contains("No active goal found for feedback") { self.0 = true; }
+                }
+            }
+            let mut message = Message(false);
+            event.record(&mut message);
+            if message.0 {
+                self.unmatched.fetch_add(1, Ordering::Relaxed);
+                if *event.metadata().level() == tracing::Level::WARN {
+                    self.warnings.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+    let ctx = ZContextBuilder::default().build()?;
+    let node = ctx.create_node("foreign_feedback_clients").build()?;
+    let server = node.create_action_server::<TestAction>("foreign_feedback_clients").build()?;
+    let first = node.create_action_client::<TestAction>("foreign_feedback_clients").build()?;
+    let second = node.create_action_client::<TestAction>("foreign_feedback_clients").build()?;
+    let (first_goal, first_execution) = tokio::join!(
+        first.send_goal(TestGoal { order: 101 }),
+        async { Ok::<_, zenoh::Error>(server.recv_goal().await?.try_accept()?.execute()) },
+    );
+    let mut first_goal = first_goal?;
+    let first_execution = first_execution?;
+    let (second_goal, second_execution) = tokio::join!(
+        second.send_goal(TestGoal { order: 202 }),
+        async { Ok::<_, zenoh::Error>(server.recv_goal().await?.try_accept()?.execute()) },
+    );
+    let mut second_goal = second_goal?;
+    let second_execution = second_execution?;
+    let mut first_feedback = first_goal.feedback().unwrap();
+    let mut second_feedback = second_goal.feedback().unwrap();
+    let unmatched = Arc::new(AtomicUsize::new(0));
+    let warnings = Arc::new(AtomicUsize::new(0));
+    tracing::subscriber::with_default(Capture { unmatched: unmatched.clone(), warnings: warnings.clone() }, || -> Result<()> {
+        first_execution.publish_feedback(TestFeedback { progress: 101 })?;
+        second_execution.publish_feedback(TestFeedback { progress: 202 })?;
+        Ok(())
+    })?;
+    assert_eq!(tokio::time::timeout(Duration::from_secs(2), first_feedback.recv()).await.unwrap().unwrap().progress, 101);
+    assert_eq!(tokio::time::timeout(Duration::from_secs(2), second_feedback.recv()).await.unwrap().unwrap().progress, 202);
+    assert!(first_feedback.try_recv().is_err(), "first client received another client's feedback");
+    assert!(second_feedback.try_recv().is_err(), "second client received another client's feedback");
+    assert_eq!(unmatched.load(Ordering::Relaxed), 2, "both clients must exercise foreign-goal filtering");
+    assert_eq!(warnings.load(Ordering::Relaxed), 0, "ordinary foreign-goal traffic must not warn");
+    first_execution.succeed(TestResult { value: 101 })?;
+    second_execution.succeed(TestResult { value: 202 })?;
+    assert_eq!(first_goal.result_with_timeout(Duration::from_secs(2)).await?.value, 101);
+    assert_eq!(second_goal.result_with_timeout(Duration::from_secs(2)).await?.value, 202);
+    Ok(())
+}

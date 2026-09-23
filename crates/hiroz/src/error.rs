@@ -30,6 +30,10 @@ pub enum Error {
     #[error("operation timed out after {0:?}")]
     Timeout(Duration),
 
+    /// The action server explicitly declined a goal request.
+    #[error("Goal rejected")]
+    GoalRejected,
+
     /// A generic, message-carrying failure that has no dedicated variant.
     #[error("{0}")]
     Other(String),

@@ -1,6 +1,9 @@
 use std::{
     marker::PhantomData,
-    sync::{Arc, Mutex, atomic::AtomicUsize},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -10,10 +13,6 @@ use zenoh::{
     sample::Sample,
 };
 
-use std::sync::atomic::Ordering;
-
-use crate::topic_name;
-
 use crate::{
     Builder,
     attachment::{Attachment, GidArray},
@@ -22,6 +21,7 @@ use crate::{
     impl_with_type_info,
     msg::{ZDeserializer, ZMessage, ZService},
     queue::BoundedQueue,
+    topic_name,
 };
 
 #[derive(Debug)]
@@ -230,7 +230,7 @@ where
         // The error carries a structured [`crate::error::Error::Timeout`] so callers
         // (and language bindings) can detect the timeout via
         // [`crate::error::is_timeout`] instead of sniffing the message string.
-        tokio::time::timeout(timeout, self.call(msg))
+        crate::compat::timeout(timeout, self.call(msg))
             .await
             .map_err(|_| crate::error::Error::timeout(timeout))?
     }

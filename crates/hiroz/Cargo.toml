@@ -58,7 +58,10 @@ zenoh = { workspace = true, default-features = false, features = [
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-tokio = { workspace = true, default-features = false, features = ["sync", "time", "macros", "rt"] }
+zenoh-runtime = "=1.10.0"
+futures = "0.3"
+tokio = { workspace = true, default-features = false, features = ["sync", "macros"] }
+tokio-util = { workspace = true, features = ["rt"] }
 zenoh = { workspace = true, default-features = false, features = [
   "transport_ws",
 ] }

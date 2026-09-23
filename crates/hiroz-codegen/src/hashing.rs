@@ -38,10 +38,9 @@ pub fn calculate_service_type_hash(
     resolved_deps: &BTreeMap<String, TypeDescription>,
 ) -> Result<TypeHash> {
     // ROS2 uses slash format, not :: format
-    // Detect if this is an action service (contains SendGoal/GetResult/CancelGoal)
-    let is_action = service_name.contains("SendGoal")
-        || service_name.contains("GetResult")
-        || service_name.contains("CancelGoal");
+    // The request description is authoritative: CancelGoal is a regular
+    // action_msgs/srv service, and unrelated service names may contain Goal.
+    let is_action = request_desc.type_name.contains("/action/");
     let path = if is_action { "action" } else { "srv" };
 
     // Action services use /action/ path, regular services use /srv/ path

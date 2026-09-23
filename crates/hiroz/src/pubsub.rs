@@ -1,29 +1,33 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
-use std::{marker::PhantomData, sync::Arc};
+use std::{
+    marker::PhantomData,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
-use tracing::{debug, trace, warn};
-use zenoh::liveliness::LivelinessToken;
-use zenoh::{Result, Session, Wait, sample::Sample};
-
-use crate::Builder;
-use crate::attachment::{Attachment, GidArray};
-use crate::common::DataHandler;
-use crate::entity::{EndpointEntity, EndpointKind};
-use crate::event::EventsManager;
-use crate::graph::Graph;
-use crate::impl_with_type_info;
-use crate::queue::BoundedQueue;
-use crate::topic_name;
-
-use crate::msg::{SerdeCdrSerdes, ZDeserializer, ZMessage, ZSerializer};
-use crate::qos::QosProfile;
 use hiroz_protocol::qos::{QosDurability, QosHistory, QosReliability};
-use std::sync::Mutex;
+use tracing::{debug, trace, warn};
+use zenoh::{Result, Session, Wait, liveliness::LivelinessToken, sample::Sample};
 use zenoh_ext::{
     AdvancedPublisher, AdvancedPublisherBuilder, AdvancedPublisherBuilderExt, AdvancedSubscriber,
     AdvancedSubscriberBuilder, AdvancedSubscriberBuilderExt, CacheConfig, HistoryConfig,
     MissDetectionConfig, RecoveryConfig,
+};
+
+use crate::{
+    Builder,
+    attachment::{Attachment, GidArray},
+    common::DataHandler,
+    entity::{EndpointEntity, EndpointKind},
+    event::EventsManager,
+    graph::Graph,
+    impl_with_type_info,
+    msg::{SerdeCdrSerdes, ZDeserializer, ZMessage, ZSerializer},
+    qos::QosProfile,
+    queue::BoundedQueue,
+    topic_name,
 };
 
 /// Sporadic heartbeat period for TransientLocal+Reliable publishers.
@@ -408,7 +412,7 @@ where
     /// assert!(publisher.wait_for_subscription(1, Duration::from_secs(5)).await);
     /// ```
     pub async fn wait_for_subscription(&self, count: usize, timeout: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = crate::compat::Instant::now() + timeout;
         loop {
             // Arm the notification *before* reading the count to avoid a TOCTOU
             // race where a subscriber arrives between the count check and the await.
@@ -423,13 +427,13 @@ where
                 return true;
             }
 
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining = deadline.saturating_duration_since(crate::compat::Instant::now());
             if remaining.is_zero() {
                 return false;
             }
 
             // Sleep until either a graph change fires or the deadline passes.
-            if tokio::time::timeout(remaining, &mut notified)
+            if crate::compat::timeout(remaining, &mut notified)
                 .await
                 .is_err()
             {
@@ -1069,7 +1073,7 @@ where
     /// assert!(subscriber.wait_for_publisher(1, Duration::from_secs(5)).await);
     /// ```
     pub async fn wait_for_publisher(&self, count: usize, timeout: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = crate::compat::Instant::now() + timeout;
         loop {
             let notified = self.graph.change_notify.notified();
             tokio::pin!(notified);
@@ -1082,12 +1086,12 @@ where
                 return true;
             }
 
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining = deadline.saturating_duration_since(crate::compat::Instant::now());
             if remaining.is_zero() {
                 return false;
             }
 
-            if tokio::time::timeout(remaining, &mut notified)
+            if crate::compat::timeout(remaining, &mut notified)
                 .await
                 .is_err()
             {

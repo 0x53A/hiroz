@@ -443,7 +443,7 @@ mod tests {
         handle2.canceled(TestResult { value: 2 })?;
 
         let (cancel_response, _) = client_task.await.expect("client task panicked")?;
-        assert_eq!(cancel_response.return_code, 1);
+        assert_eq!(cancel_response.return_code, 0);
 
         let _ = timeout(Duration::from_secs(5), goal_handle1.result())
             .await
@@ -507,4 +507,55 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// Requests without ROS correlation metadata must fail without panicking a task.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_action_request_metadata() -> Result<()> {
+    use hiroz::{action::{GoalId, GoalStatus, ZAction, messages::{GetResultRequest, GetResultResponse, SendGoalRequest, CancelGoalServiceRequest}, state::ServerGoalState}, attachment::Attachment, msg::ZMessage};
+    let ctx = ZContextBuilder::default().build()?;
+    let node = ctx.create_node("action_metadata_test").build()?;
+    let server = node.create_action_server::<TestAction>("metadata_action").build()?
+        .with_handler(|goal| async move { goal.succeed(TestResult { value: 91 }).unwrap(); });
+    let id = GoalId::new();
+    server.goal_manager().modify(|manager| {
+        manager.goals.insert(id, ServerGoalState::Terminated {
+            result: TestResult { value: 73 }, status: GoalStatus::Succeeded,
+            timestamp: std::time::Instant::now(), expires_at: None,
+        });
+    });
+    let info = TestAction::get_result_type_info();
+    let key = format!("0/metadata_action/_action/get_result/{}/{}", info.name.replace('%', "/"), info.hash);
+    let payload = <GetResultRequest as ZMessage>::serialize(&GetResultRequest { goal_id: id });
+    let goal_id = GoalId::new();
+    let invalid_requests = [
+        ("get_result", TestAction::get_result_type_info(), payload.clone()),
+        ("send_goal", TestAction::send_goal_type_info(), <SendGoalRequest<TestAction> as ZMessage>::serialize(&SendGoalRequest { goal_id, goal: TestGoal { order: 1 } })),
+        ("cancel_goal", TestAction::cancel_goal_type_info(), <CancelGoalServiceRequest as ZMessage>::serialize(&CancelGoalServiceRequest { goal_info: hiroz::action::GoalInfo::new(id) })),
+    ];
+    for (operation, info, request) in invalid_requests {
+        let request_key = format!("0/metadata_action/_action/{operation}/{}/{}", info.name.replace('%', "/"), info.hash);
+        for metadata in [None, Some(zenoh::bytes::ZBytes::from(vec![1u8]))] {
+            let mut get = node.session().get(request_key.clone()).payload(request.clone()).timeout(Duration::from_secs(1));
+            if let Some(metadata) = metadata { get = get.attachment(metadata); }
+            let replies = get.await?;
+            let reply = timeout(Duration::from_secs(2), replies.recv_async()).await?
+                .expect("invalid metadata must produce an explicit query error, not end silently");
+            assert!(reply.into_result().is_err(), "{operation} accepted invalid metadata");
+        }
+    }
+    assert!(!server.goal_manager().read(|manager| manager.goals.contains_key(&goal_id)));
+    let replies = node.session().get(key).payload(payload)
+        .attachment(Attachment::new(27, [9; 16])).await?;
+    let sample = timeout(Duration::from_secs(2), replies.recv_async()).await??.into_result().unwrap();
+    let attachment = Attachment::try_from(sample.attachment().unwrap())?;
+    assert_eq!(attachment.sequence_number, 27);
+    assert_eq!(attachment.source_gid, [9; 16]);
+    let response = <GetResultResponse<TestAction> as ZMessage>::deserialize(&sample.payload().to_bytes())?;
+    assert_eq!(response.status, GoalStatus::Succeeded as i8);
+    assert_eq!(response.result.value, 73);
+    let client = node.create_action_client::<TestAction>("metadata_action").build()?;
+    let goal = timeout(Duration::from_secs(2), client.send_goal(TestGoal { order: 2 })).await??;
+    assert_eq!(timeout(Duration::from_secs(2), goal.result()).await??.value, 91);
+    Ok(())
 }
