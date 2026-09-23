@@ -1,8 +1,7 @@
 # Browser WASM branch
 
 This branch demonstrates Rust hiroz ROS nodes in a browser using the Zenoh WASM
-fork. Upstream maintainers can reuse individual pieces without adopting the
-whole port. Upstream main was merged through
+fork. Upstream main was merged through
 `c50384343167e43bc86f0b18681e670708449184`.
 
 Use the [integration repository](https://github.com/0x53A/hiroz-web), cloned
@@ -11,7 +10,7 @@ the matching Zenoh fork at `../zenoh-wasm`; a standalone clone of this branch
 needs that sibling checkout. The browser examples carry their own Cargo patches
 because dependency-workspace patches do not propagate to consumers.
 
-## Reusable changes
+## Implementation
 
 - Target-specific dependencies and `compat`: synchronization, clocks, spawning
   and task ownership without a Tokio execution runtime in browsers.
