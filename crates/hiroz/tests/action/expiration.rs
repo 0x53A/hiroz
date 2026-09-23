@@ -312,6 +312,27 @@ impl ZAction for DefaultResultAction {
     fn default_result() -> Option<TestResult> { Some(TestResult { sequence: vec![] }) }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_panicking_managed_handler_aborts_goal_and_server_keeps_running() -> Result<()> {
+    let ctx = ZContextBuilder::default().build()?;
+    let node = ctx.create_node("panicking_action_handler").build()?;
+    let _server = node.create_action_server::<DefaultResultAction>("panicking_action_handler")
+        .build()?.with_handler(|goal| async move {
+            if goal.goal().order == 0 {
+                panic!("simulated application handler failure");
+            }
+            goal.succeed(TestResult { sequence: vec![1] }).unwrap();
+        });
+    let client = node.create_action_client::<DefaultResultAction>("panicking_action_handler").build()?;
+    for (order, expected) in [(0, GoalStatus::Aborted), (1, GoalStatus::Succeeded)] {
+        let goal = client.send_goal(TestGoal { order }).await?;
+        let (status, _) = tokio::time::timeout(Duration::from_secs(2), goal.result_with_status())
+            .await.expect("a handler failure must resolve the goal result")?;
+        assert_eq!(status, expected);
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_manual_timeout_signals_handler_and_retains_aborted_result() -> Result<()> {
     let ctx = ZContextBuilder::default().build()?;

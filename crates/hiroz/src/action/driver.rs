@@ -23,6 +23,20 @@ use super::{
 };
 use crate::msg::ZMessage;
 
+// Retire unfinished goals on every exit, including native handler panics and
+// task cancellation. Identity prevents a late drop from affecting a reused UUID.
+struct ManagedGoal<A: ZAction> {
+    server: ZActionServer<A>,
+    id: super::GoalId,
+    instance: Arc<()>,
+}
+
+impl<A: ZAction> Drop for ManagedGoal<A> {
+    fn drop(&mut self) {
+        self.server.abort_unfinished(self.id, &self.instance);
+    }
+}
+
 /// Runs the unified driver loop for an action server with automatic goal handling.
 ///
 /// This function consolidates all protocol logic into a single event loop,
@@ -156,6 +170,11 @@ async fn handle_goal_request<A, F, Fut>(
     let goal_id = requested.info.goal_id;
     let Ok(accepted) = requested.try_accept() else { return };
     let instance = accepted.instance.as_ref().expect("accepted goal has an identity").clone();
+    let _completion = ManagedGoal {
+        server: ZActionServer::from_inner(inner.clone()),
+        id: goal_id,
+        instance,
+    };
     let executing = accepted.execute();
 
     // Execute the user's handler
@@ -164,10 +183,8 @@ async fn handle_goal_request<A, F, Fut>(
     let duration = inner.goal_manager.read(|manager| manager.goal_timeout);
     if let Some(duration) = duration {
         let _ = crate::compat::timeout(duration, handler(executing)).await;
-        ZActionServer::from_inner(inner.clone()).abort_unfinished(goal_id, &instance);
     } else {
         handler(executing).await;
-        ZActionServer::from_inner(inner.clone()).abort_unfinished(goal_id, &instance);
     }
 }
 
