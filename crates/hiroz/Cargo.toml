@@ -54,11 +54,12 @@ tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tokio-util = { workspace = true }
 zenoh = { workspace = true, default-features = false, features = [
   "transport_tcp",
+  "transport_serial",
   "shared-memory",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-zenoh-runtime = "=1.10.0"
+zenoh-runtime = "=1.10.1"
 futures = "0.3"
 tokio = { workspace = true, default-features = false, features = ["sync", "macros"] }
 tokio-util = { workspace = true, features = ["rt"] }

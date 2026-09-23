@@ -11,9 +11,6 @@ pub use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
 pub use std::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio::time::timeout;
-#[cfg(not(target_arch = "wasm32"))]
-pub use tokio_util::sync::CancellationToken;
-#[cfg(target_arch = "wasm32")]
 pub use tokio_util::sync::CancellationToken;
 #[cfg(target_arch = "wasm32")]
 pub use zenoh_runtime::wasm_yield::Instant;

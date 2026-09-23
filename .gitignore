@@ -88,9 +88,5 @@ crates/hiroz-msgs/python/uv.lock
 .state/
 site/
 
-# wasm-demo-threaded: generated bindings; .cargo holds required build flags
-examples/wasm-demo-threaded/pkg/
-!examples/wasm-demo-threaded/.cargo/
-
 # crash dumps from pre-commit segfaults (ROS LD_LIBRARY_PATH glibc mismatch)
 core.*

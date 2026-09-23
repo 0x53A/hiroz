@@ -40,8 +40,6 @@ pub(crate) struct InnerServer<A: ZAction> {
     pub(crate) status_pub:
         Arc<crate::pubsub::ZPub<StatusMessage, <StatusMessage as ZMessage>::Serdes>>,
     pub(crate) goal_manager: Arc<SafeGoalManager<A>>,
-    /// Token to cancel the default result handler when switching to full driver mode
-    pub(crate) result_handler_token: CancellationToken,
     pub(crate) driver_started: AtomicBool,
     pub(crate) goal_info: crate::compat::Mutex<HashMap<GoalId, GoalInfo>>,
     // Private identity distinguishes accepted instances when a UUID is reused.
@@ -285,7 +283,6 @@ impl<'a, A: ZAction> Builder for ZActionServerBuilder<'a, A> {
         let goal_manager = Arc::new(SafeGoalManager::new(self.result_timeout, self.goal_timeout));
 
         let cancellation_token = CancellationToken::new();
-        let result_handler_token = CancellationToken::new();
 
         // Create the inner server
         let inner = Arc::new(InnerServer {
@@ -295,15 +292,13 @@ impl<'a, A: ZAction> Builder for ZActionServerBuilder<'a, A> {
             feedback_pub: Arc::new(feedback_pub),
             status_pub: Arc::new(status_pub),
             goal_manager,
-            result_handler_token: result_handler_token.clone(),
             driver_started: AtomicBool::new(false),
             goal_info: crate::compat::Mutex::new(HashMap::new()),
             goal_instances: crate::compat::Mutex::new(HashMap::new()),
             cancel_pending: crate::compat::Mutex::new(std::collections::HashSet::new()),
         });
 
-        // Spawn background task to handle result requests (default mode for manual goal handling)
-        // This task will be cancelled if with_handler() is called
+        // Keep result requests and expiration independent of goal admission/handling.
         let weak_inner = Arc::downgrade(&inner);
         let global_shutdown = cancellation_token.clone();
         crate::compat::spawn(async move {
@@ -422,9 +417,6 @@ impl<A: ZAction> ZActionServer<A> {
         &self.inner.goal_manager
     }
 
-    fn result_handler_token(&self) -> &CancellationToken {
-        &self.inner.result_handler_token
-    }
 }
 
 impl<A: ZAction> ZActionServer<A> {
@@ -595,9 +587,8 @@ impl<A: ZAction> ZActionServer<A> {
         // Start a single goal/cancel driver. Results remain owned by the original
         // background task, so switching modes cannot lose an in-flight query.
         assert!(!self.inner.driver_started.swap(true, Ordering::AcqRel), "action handler already installed");
-        self.result_handler_token().cancel();
 
-        // 2. Start the full driver loop that handles all protocol events
+        // Start the goal/cancel driver.
         let weak_inner = Arc::downgrade(&self.inner);
         let shutdown_token = self._shutdown.token.clone();
         crate::compat::spawn(async move {
@@ -1022,9 +1013,8 @@ impl<A: ZAction> GoalHandle<A, Executing> {
     /// Returns `true` if a cancel was requested for this goal (either via the flag
     /// already set, or a newly routed request processed here).
     ///
-    /// Fixes the silent-drop bug where a cancel for goal B would be lost if goal A's
-    /// handle polled first and found a goal ID mismatch. Each goal now has its own
-    /// dedicated channel; `drain()` routes all pending messages before we check ours.
+    /// A handle polling first also applies requests for other goals, so their
+    /// cancellation does not depend on which handle happens to poll the queue.
     pub fn try_process_cancel(&self) -> bool {
         if !self.server.goal_manager().read(|_| self.server.is_current_instance(self.info.goal_id, self.instance.as_ref())) {
             return true;

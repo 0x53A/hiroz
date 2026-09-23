@@ -1,7 +1,7 @@
 //! Unified driver loop for action server event handling.
 //!
 //! This module provides a single event loop that handles all server-side
-//! action protocol events (goal requests, cancel requests, result requests)
+//! goal admission, execution and cancellation
 //! in a sequential, race-condition-free manner.
 
 use std::{

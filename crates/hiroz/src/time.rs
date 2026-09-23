@@ -204,20 +204,7 @@ impl ZClock {
 
     pub fn now(&self) -> ZTime {
         match self.inner.as_ref() {
-            ClockInner::System => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    ZTime::from_system_time(system_time_now())
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    // js_sys::Date::now() returns milliseconds since epoch as f64
-                    let millis = js_sys::Date::now() as u64;
-                    ZTime {
-                        since_epoch: Duration::from_millis(millis),
-                    }
-                }
-            }
+            ClockInner::System => ZTime::from_system_time(system_time_now()),
             ClockInner::Simulated(state) => *state.now.lock(),
         }
     }
@@ -252,20 +239,11 @@ impl ZClock {
 
     pub fn sleep_until(&self, deadline: ZTime) -> ZSleep {
         match self.inner.as_ref() {
-            #[cfg(not(target_arch = "wasm32"))]
             ClockInner::System => {
                 let now = system_time_now();
                 let deadline = deadline.to_system_time();
                 let duration = deadline.duration_since(now).unwrap_or(Duration::ZERO);
-                ZSleep(Box::pin(tokio::time::sleep(duration)))
-            }
-            #[cfg(target_arch = "wasm32")]
-            ClockInner::System => {
-                let duration = deadline
-                    .to_system_time()
-                    .duration_since(system_time_now())
-                    .unwrap_or(Duration::ZERO);
-                ZSleep(Box::pin(zenoh_runtime::wasm_yield::sleep(duration)))
+                ZSleep(Box::pin(crate::compat::sleep(duration)))
             }
             ClockInner::Simulated(_) => {
                 let clock = self.clone();

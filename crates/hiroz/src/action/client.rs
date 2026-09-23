@@ -419,7 +419,7 @@ impl<A: ZAction> ZActionClient<A> {
         let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
         let (status_tx, status_rx) = watch::channel(GoalStatus::Unknown);
 
-        // 2. Insert into board (Lock-Free)
+        // 2. Register feedback and status routing.
         self.goal_board.active_goals.lock().insert(
             goal_id,
             GoalChannels {
@@ -438,18 +438,10 @@ impl<A: ZAction> ZActionClient<A> {
         // 3. Send goal request via service client
         let request = SendGoalRequest { goal_id, goal };
         tracing::debug!("Sending goal request for goal_id: {:?}", goal_id);
-        let response = match self.goal_client.call(&request).await {
-            Ok(response) => response,
-            Err(error) => {
-                self.goal_board.active_goals.lock().remove(&goal_id);
-                return Err(error);
-            }
-        };
+        let response = self.goal_client.call(&request).await?;
 
         // 5. Check if accepted
         if !response.accepted {
-            // Cleanup on rejection
-            self.goal_board.active_goals.lock().remove(&goal_id);
             return Err(Box::new(crate::error::Error::GoalRejected));
         }
 
@@ -661,12 +653,7 @@ impl<A: ZAction> GoalHandle<A, goal_state::Active> {
         // Fetch result. The server's get_result handler will either:
         // - Return immediately if the goal is already terminated
         // - Block until termination otherwise
-        let res = self.client.get_result(self.id).await;
-
-        // Cleanup Board (Crucial for Memory Safety)
-        self.client.goal_board.active_goals.lock().remove(&self.id);
-
-        res
+        self.client.get_result(self.id).await
     }
 
     /// Consumes the handle and returns both terminal status and result.
@@ -689,14 +676,9 @@ impl<A: ZAction> GoalHandle<A, goal_state::Active> {
     ///
     /// The result of the action once it completes, or a timeout error.
     pub async fn result_with_timeout(self, timeout: std::time::Duration) -> Result<A::Result> {
-        let res = match crate::compat::timeout(timeout, self.client.get_result(self.id)).await {
+        match crate::compat::timeout(timeout, self.client.get_result(self.id)).await {
             Ok(res) => res,
             Err(_) => Err(crate::error::Error::timeout(timeout)),
-        };
-
-        // Cleanup Board (Crucial for Memory Safety)
-        self.client.goal_board.active_goals.lock().remove(&self.id);
-
-        res
+        }
     }
 }

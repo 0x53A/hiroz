@@ -1,28 +1,27 @@
+use crate::compat::Mutex;
+use crate::time::system_time_now;
+use serde::Serialize;
+use slab::Slab;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Condvar, Mutex as StdMutex, Weak},
     time::{Duration, SystemTime},
 };
-
-use serde::Serialize;
-use slab::Slab;
 use tokio::sync::Notify;
-use tracing::{self, debug};
-#[cfg(test)]
-use zenoh::key_expr::KeyExpr;
-use zenoh::{Result, Session, Wait, pubsub::Subscriber, sample::SampleKind, session::ZenohId};
+use tracing::debug;
 
 #[cfg(test)]
 use crate::entity::ADMIN_SPACE;
-use crate::{
-    compat::Mutex,
-    entity::{
-        ACTION_SERVER_SERVICE_SUFFIXES, ACTION_SERVER_TOPIC_SUFFIXES, EndpointEntity, EndpointKind,
-        Entity, LivelinessKE, NodeKey, Topic, action_name_from_topic,
-    },
-    event::GraphEventManager,
-    time::system_time_now,
+use crate::entity::{
+    ACTION_SERVER_SERVICE_SUFFIXES, ACTION_SERVER_TOPIC_SUFFIXES, EndpointEntity, EndpointKind,
+    Entity, LivelinessKE, NodeKey, Topic, action_name_from_topic,
 };
+use crate::event::GraphEventManager;
+use tracing;
+use zenoh::{Result, Session, Wait, pubsub::Subscriber, sample::SampleKind, session::ZenohId};
+
+#[cfg(test)]
+use zenoh::key_expr::KeyExpr;
 
 /// A serializable snapshot of the ROS graph state
 #[derive(Debug, Clone, Serialize)]

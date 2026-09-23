@@ -26,7 +26,6 @@ members = [
 # native workspace build. Build them explicitly:
 #   cargo build -p hu-meter --target wasm32-wasip2 --manifest-path crates/hiroz-union/plugins/hu-meter/Cargo.toml
 exclude = [
-  "examples/wasm-demo",
   "crates/hiroz-union/plugins/hu-meter",
   "crates/hiroz-union/plugins/hu-monitor",
   "crates/hiroz-union/plugins/hu-plugin-template",

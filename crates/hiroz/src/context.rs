@@ -3,9 +3,10 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
-pub use hiroz_protocol::KeyExprFormat;
 use tracing::{debug, warn};
 use zenoh::{Result, Session, Wait};
+
+pub use hiroz_protocol::KeyExprFormat;
 
 use crate::{
     Builder,
@@ -542,7 +543,7 @@ impl ZContextBuilder {
     /// Unlike `build()`, this method:
     /// - Uses `zenoh::open(config).await` instead of `.wait()`
     /// - Reads no config file from disk (there is no filesystem in a browser)
-    /// - Requires a zenoh config to be provided via `with_zenoh_config()`
+    /// - Uses `with_zenoh_config()` or the built-in session defaults
     ///
     /// `ROS_DOMAIN_ID` is still honoured, because `Default::default()`
     /// resolves it before we get here. In a browser the variable is simply
@@ -565,9 +566,10 @@ impl ZContextBuilder {
             }
         };
 
-        let mut config = self
-            .zenoh_config
-            .unwrap_or_else(|| crate::config::session_config().unwrap());
+        let mut config = match self.zenoh_config {
+            Some(config) => config,
+            None => crate::config::session_config()?,
+        };
 
         // Apply JSON overrides
         for (key, value) in self.config_overrides {
