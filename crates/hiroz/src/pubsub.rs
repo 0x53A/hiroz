@@ -1,33 +1,29 @@
-use std::{
-    marker::PhantomData,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+use std::{marker::PhantomData, sync::Arc};
 
-use hiroz_protocol::qos::{QosDurability, QosHistory, QosReliability};
 use tracing::{debug, trace, warn};
-use zenoh::{Result, Session, Wait, liveliness::LivelinessToken, sample::Sample};
+use zenoh::liveliness::LivelinessToken;
+use zenoh::{Result, Session, Wait, sample::Sample};
+
+use crate::Builder;
+use crate::attachment::{Attachment, GidArray};
+use crate::common::DataHandler;
+use crate::entity::{EndpointEntity, EndpointKind};
+use crate::event::{EventsManager, MessageLossTracker};
+use crate::graph::Graph;
+use crate::impl_with_type_info;
+use crate::queue::BoundedQueue;
+use crate::topic_name;
+
+use crate::msg::{SerdeCdrSerdes, ZDeserializer, ZMessage, ZSerializer};
+use crate::qos::QosProfile;
+use hiroz_protocol::qos::{QosDurability, QosHistory, QosReliability};
+use std::sync::Mutex;
 use zenoh_ext::{
     AdvancedPublisher, AdvancedPublisherBuilder, AdvancedPublisherBuilderExt, AdvancedSubscriber,
     AdvancedSubscriberBuilder, AdvancedSubscriberBuilderExt, CacheConfig, HistoryConfig,
     MissDetectionConfig, RecoveryConfig,
-};
-
-use crate::{
-    Builder,
-    attachment::{Attachment, GidArray},
-    common::DataHandler,
-    entity::{EndpointEntity, EndpointKind},
-    event::EventsManager,
-    graph::Graph,
-    impl_with_type_info,
-    msg::{SerdeCdrSerdes, ZDeserializer, ZMessage, ZSerializer},
-    qos::QosProfile,
-    queue::BoundedQueue,
-    topic_name,
 };
 
 /// Sporadic heartbeat period for TransientLocal+Reliable publishers.
@@ -39,6 +35,22 @@ const SAMPLE_MISS_HEARTBEAT_PERIOD: Duration = Duration::from_millis(500);
 /// (`Duration::from_millis(u64::MAX)`, not `Duration::MAX`, to avoid any
 /// truncation surprises inside zenoh-ext's internal `as_millis()` paths).
 const TRANSIENT_LOCAL_QUERY_TIMEOUT: Duration = Duration::from_millis(u64::MAX);
+
+/// Feed an arriving sample's attachment to the loss tracker.
+///
+/// A sample whose attachment is missing or undecodable is **ignored, not
+/// counted**. The sequence number is the only thing that makes loss detectable,
+/// and a publisher that does not send one — a plain zenoh peer rather than a
+/// hiroz node — must not be reported as lossy just for being unrecognised.
+fn observe_loss(loss: &MessageLossTracker, sample: &Sample) {
+    let Some(bytes) = sample.attachment() else {
+        return;
+    };
+    let Ok(attachment) = Attachment::try_from(bytes) else {
+        return;
+    };
+    loss.observe(attachment.source_gid, attachment.sequence_number);
+}
 
 fn cache_depth_from_history(history: QosHistory) -> usize {
     // Mirrors rmw_zenoh_cpp's `QoS::best_available_qos` (`qos.cpp:107`):
@@ -825,9 +837,17 @@ where
             key_expr, self.entity.qos
         );
 
+        // Built here rather than at `ZSub` construction: the loss tracker needs
+        // a handle to it, and the tracker is captured by the callback below.
+        let gid = crate::entity::endpoint_gid(&self.entity)
+            .expect("local endpoint always has node identity");
+        let events_mgr = Arc::new(Mutex::new(EventsManager::new(gid)));
+        let loss = Arc::new(MessageLossTracker::new(events_mgr.clone()));
+
         // Wrap handler with encoding validation if expected encoding is set
         let expected_encoding = self.expected_encoding.clone();
         let validated_handler = move |sample: Sample| {
+            observe_loss(&loss, &sample);
             // Validate encoding if expected encoding is set
             if let Some(ref expected) = expected_encoding {
                 let encoding_str = sample.encoding().to_string();
@@ -864,8 +884,6 @@ where
         let sub_builder = apply_transient_local_sub(sub_builder, &self.entity.qos);
         let inner = sub_builder.wait()?;
 
-        let gid = crate::entity::endpoint_gid(&self.entity)
-            .expect("local endpoint always has node identity");
         let lv_ke = self
             .keyexpr_format
             .liveliness_key_expr(&self.entity, &self.session.zid())?;
@@ -882,7 +900,7 @@ where
             _inner: inner,
             _lv_token: lv_token,
             queue,
-            events_mgr: Arc::new(Mutex::new(EventsManager::new(gid))),
+            events_mgr,
             graph: self.graph,
             dyn_schema: self.dyn_schema,
             expected_encoding: self.expected_encoding,
@@ -1013,6 +1031,25 @@ impl<T: ZMessage, Q, S: ZDeserializer> std::fmt::Debug for ZSub<T, Q, S> {
     }
 }
 
+/// Accessors that do not depend on how the subscriber delivers.
+///
+/// These were on the `ZSub<T, Sample, S>` (queue-mode) impl only, so a callback
+/// subscriber could not reach its own events manager — the handle the rmw layer
+/// needs to install an event callback, and the only way to observe
+/// [`MessageLost`](crate::event::ZenohEventType::MessageLost). Neither field has
+/// anything to do with the queue.
+impl<T: ZMessage, Q, S: ZDeserializer> ZSub<T, Q, S> {
+    /// The event manager this subscriber raises endpoint events on.
+    pub fn events_mgr(&self) -> &Arc<Mutex<EventsManager>> {
+        &self.events_mgr
+    }
+
+    /// Get a reference to the endpoint entity for this subscriber.
+    pub fn entity(&self) -> &EndpointEntity {
+        &self.entity
+    }
+}
+
 impl<T, S> ZSub<T, Sample, S>
 where
     T: ZMessage,
@@ -1042,15 +1079,6 @@ where
         queue
             .recv_timeout(timeout)
             .ok_or_else(|| crate::error::Error::timeout(timeout))
-    }
-
-    pub fn events_mgr(&self) -> &Arc<Mutex<EventsManager>> {
-        &self.events_mgr
-    }
-
-    /// Get a reference to the endpoint entity for this subscriber.
-    pub fn entity(&self) -> &EndpointEntity {
-        &self.entity
     }
 
     /// Check if there are messages available in the queue
