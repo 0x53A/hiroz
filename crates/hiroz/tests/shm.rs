@@ -10,6 +10,21 @@ use hiroz::{
 use hiroz_msgs::std_msgs::ByteMultiArray;
 use zenoh_buffers::buffer::{Buffer, SplitBuffer};
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_async_builder_enables_configured_shm_transport() {
+    let mut config = zenoh::Config::default();
+    config.insert_json5("scouting/multicast/enabled", "false").unwrap();
+    config.insert_json5("listen/endpoints", "[]").unwrap();
+    config.insert_json5("transport/shared_memory/enabled", "false").unwrap();
+    let ctx = ZContextBuilder::default()
+        .with_zenoh_config(config)
+        .with_shm_pool_size(512 * 1024).unwrap()
+        .build_async().await.unwrap();
+    let node = ctx.create_node("async_shm_config").build().unwrap();
+    assert!(node.session().config().get_typed::<bool>("transport/shared_memory/enabled").unwrap());
+    ctx.shutdown_async().await.unwrap();
+}
+
 #[test]
 fn test_shm_pubsub_large_message() {
     // Setup context with SHM enabled

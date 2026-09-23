@@ -54,3 +54,5 @@ TurtleBot interoperability, and no hard motor-control deadline is claimed.
 See the integration repository's
 [validation notes](https://github.com/0x53A/hiroz-web/blob/main/docs/reviews/2026-09-23-upstream-cleanup.md)
 for fresh results and the remaining scope.
+The subsequent [iterative review](https://github.com/0x53A/hiroz-web/blob/main/docs/reviews/2026-09-23-iterative-review.md)
+also covers managed-handler unwinding and native async-builder SHM configuration.

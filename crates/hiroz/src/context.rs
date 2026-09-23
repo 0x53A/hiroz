@@ -571,6 +571,11 @@ impl ZContextBuilder {
             None => crate::config::session_config()?,
         };
 
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.shm_config.is_some() {
+            crate::config::enable_transport_shm(&mut config)?;
+        }
+
         // Apply JSON overrides
         for (key, value) in self.config_overrides {
             let value_str = serde_json::to_string(&value)
